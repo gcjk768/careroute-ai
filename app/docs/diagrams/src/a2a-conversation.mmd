@@ -1,0 +1,27 @@
+sequenceDiagram
+    autonumber
+    participant O as Symptom-Intake
+    participant C as Severity-Classifier
+    participant S as Safety-Override
+    participant R as Care-Routing
+    participant H as Human-in-the-Loop
+    participant D as Clinician-Handoff
+    participant F as Reflection
+    O->>C: symptoms.normalised
+    C-->>S: acuity.classified
+    C-->>R: acuity.classified
+    C-->>H: acuity.classified
+    O->>S: safety.assessment.requested
+    S-->>R: safety.override
+    S-->>H: safety.override
+    S-->>D: safety.override
+    S-->>F: safety.override
+    Note right of S: can only RAISE acuity
+    R-->>H: care.routed
+    R-->>D: care.routed
+    R-->>F: care.routed
+    H->>F: review.decision
+    alt case escalated
+        D->>O: handoff.ready
+    end
+    F->>O: decision.reviewed

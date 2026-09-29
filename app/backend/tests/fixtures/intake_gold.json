@@ -1,0 +1,569 @@
+{
+  "_description": "Gold dataset for E1-intake-extraction (app/evals/plan.py). Owner: Sham Goh. Scores SymptomIntakeAgent on the three fields it writes. THE POINT OF THIS FILE is that the two paths are scored SEPARATELY: the deterministic _fallback() is English-only by design and performs no translation, so scoring it on Chinese input would measure a documented decision as if it were a defect. Language detection is scored on every row (it is deterministic and language-independent); keyword metrics are scored on the rows each path is designed to handle, and the non-English deterministic result is reported as a coverage number rather than a pass/fail. Gold keywords were written from the patient text FIRST and only then compared against the extractor — where the two disagree, the gold stands and the test fails. That is the point of a gold set.",
+  "_schema": {
+    "id": "stable identifier, used in failure messages",
+    "text": "raw patient input, exactly as a patient would type or dictate it",
+    "declared_language": "what the UI sends in TriageRequest.language — deliberately WRONG or left at the 'en' default on some rows, because a real UI cannot be trusted",
+    "gold_language": "the language the patient actually wrote in (ISO 639-1)",
+    "gold_keywords": "the canonical keywords a clinician would expect to be extracted; drawn from intake._SYMPTOM_VOCABULARY labels",
+    "is_voice": "true = arrived via speech-to-text, so it carries transcription noise",
+    "notes": "why a triage nurse would label it this way",
+    "deterministic_expected": "true = the deterministic _fallback() is expected to extract the gold keywords. False for ALL non-English rows (English-only vocabulary, no translation) and for the misspelling rows, which exist precisely to prove the empty-keyword LLM trigger is necessary. Keyword metrics for the fallback are scored on the true rows; the LLM path is scored on every row."
+  },
+  "cases": [
+    {
+      "id": "en-chest-pain-classic",
+      "text": "I have crushing chest pain and I cannot breathe properly.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "Textbook ACS wording. Both keywords are literal; anything less is a miss.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-fever-cough",
+      "text": "I have had a bad cough and a fever for two days.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "Common presentation. Duration is present but not itself a symptom keyword.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-stroke-fast",
+      "text": "My face is drooping on one side and my speech is slurred.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "stroke signs"
+      ],
+      "is_voice": false,
+      "notes": "FAST signs. One canonical keyword covers both surface forms.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-anaphylaxis",
+      "text": "I ate peanuts and now my throat is closing and my tongue is swelling.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "allergic reaction"
+      ],
+      "is_voice": false,
+      "notes": "Anaphylaxis. Must not be reported as sore throat — different urgency entirely.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-self-harm",
+      "text": "I have been thinking about suicide and I want to die.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "self-harm risk"
+      ],
+      "is_voice": false,
+      "notes": "Must be caught from 'suicide' as well as 'suicidal'.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-severe-bleeding",
+      "text": "I have a deep cut on my arm and it will not stop bleeding.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "severe bleeding"
+      ],
+      "is_voice": false,
+      "notes": "'will not stop bleeding' is the severity signal, not the cut itself.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-seizure",
+      "text": "My son had a seizure this morning and was convulsing.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "seizure"
+      ],
+      "is_voice": false,
+      "notes": "Third-party report; the symptom is still the patient's.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-abdominal-vomiting",
+      "text": "Severe stomach pain and I keep vomiting since last night.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "vomiting",
+        "abdominal pain"
+      ],
+      "is_voice": false,
+      "notes": "Two distinct signals. 'Severe' is deliberately NOT labelled as the separate 'severe pain' keyword: that entry means a GENERIC severity claim ('worst pain of my life'), and severity attached to a located pain is already carried by 'abdominal pain'. Emitting both would tell the clinician nothing extra.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-nausea-not-vomiting",
+      "text": "I feel really nauseous but I have not actually thrown up.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "nausea"
+      ],
+      "is_voice": false,
+      "notes": "THE NAUSEA/VOMITING SEPARATION TEST. Reporting 'vomiting' here asserts a symptom the patient explicitly denied — a hallucination, not a near-miss.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-minor-sprain",
+      "text": "I twisted my ankle playing football and it is bruised.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "bruising",
+        "sprain or strain"
+      ],
+      "is_voice": false,
+      "notes": "Minor trauma — the category E5 found the model was blind to.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-cold-symptoms",
+      "text": "Runny nose, blocked nose and sneezing since yesterday.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "cold symptoms"
+      ],
+      "is_voice": false,
+      "notes": "Three surface forms collapse to one canonical keyword; must not be reported three times.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-dizzy-headache",
+      "text": "I feel dizzy and lightheaded with a bad headache.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "headache",
+        "dizziness"
+      ],
+      "is_voice": false,
+      "notes": "Two separate canonical keywords.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-rash",
+      "text": "I have an itchy rash all over my arms.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "rash"
+      ],
+      "is_voice": false,
+      "notes": "Low acuity; included so the set is not all emergencies.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-sore-throat",
+      "text": "My throat hurts when I swallow.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "sore throat"
+      ],
+      "is_voice": false,
+      "notes": "Must not be confused with the throat-swelling anaphylaxis wording.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-dehydration",
+      "text": "I am dehydrated and cannot keep fluids down.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "dehydration"
+      ],
+      "is_voice": false,
+      "notes": "Both surface forms map to one keyword.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-many-symptoms-cap",
+      "text": "Chest pain, cannot breathe, throat swelling, heavy bleeding, a seizure, the worst pain of my life, fever and a cough.",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness",
+        "severe bleeding",
+        "allergic reaction",
+        "seizure",
+        "severe pain"
+      ],
+      "is_voice": false,
+      "notes": "THE TRUNCATION TEST. Eight symptoms, cap is six. Fever and cough are the two that may be dropped; dropping chest pain instead would be a safety failure.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-typo-cant-breath",
+      "text": "cant breath properly and my chest feels tight",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "MISSPELLED EMERGENCY. 'breath' is missing its final e, so the deterministic vocabulary cannot match it — this row is what the empty-keyword LLM trigger exists for. 'chest feels tight' is also not a literal vocabulary form.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "en-typo-coff-hedache",
+      "text": "bad coff and hedache since yesterday",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "headache",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "Two misspellings at once. Deterministic path is expected to score zero here; the LLM path must recover both.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "en-typo-feaver",
+      "text": "I have a feaver and my stomache hurts",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "fever",
+        "abdominal pain"
+      ],
+      "is_voice": false,
+      "notes": "Phonetic misspellings a stressed patient plausibly types.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "en-voice-disfluency",
+      "text": "um  i uh i i have like a really bad  headache and um nausea",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "nausea",
+        "headache"
+      ],
+      "is_voice": true,
+      "notes": "VOICE NOISE. Fillers and a stutter-repeat. 'like' must survive — 'feels like' is clinical description, not filler.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-voice-run-on",
+      "text": "so uh my chest has been hurting erm since this morning and you know i feel dizzy",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "dizziness"
+      ],
+      "is_voice": true,
+      "notes": "'chest has been hurting' is a paraphrase the literal vocabulary cannot match — only 'dizzy' is a literal hit. Recovering chest pain here needs the LLM.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "en-voice-fever-cough",
+      "text": "erm i have had a cough and a fever mm for a few days now",
+      "declared_language": "en",
+      "gold_language": "en",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": true,
+      "notes": "Voice noise around otherwise literal symptoms — the deterministic path must still get both.",
+      "deterministic_expected": true
+    },
+    {
+      "id": "es-chest-pain",
+      "text": "Tengo un dolor fuerte en el pecho y no puedo respirar",
+      "declared_language": "es",
+      "gold_language": "es",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "Spanish emergency, language correctly declared.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "es-fever-cough-declared-wrong",
+      "text": "Tengo fiebre y tos desde hace tres dias",
+      "declared_language": "en",
+      "gold_language": "es",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "WRONG DECLARATION. The UI says English; marker evidence must override it.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "es-headache",
+      "text": "Me duele mucho la cabeza",
+      "declared_language": "es",
+      "gold_language": "es",
+      "gold_keywords": [
+        "headache"
+      ],
+      "is_voice": false,
+      "notes": "Short utterance — fewer markers, so detection is harder.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "es-vomiting",
+      "text": "Estoy vomitando y no puedo retener liquidos",
+      "declared_language": "es",
+      "gold_language": "es",
+      "gold_keywords": [
+        "vomiting",
+        "dehydration"
+      ],
+      "is_voice": false,
+      "notes": "Two signals in Spanish. NOTE: 'vomitando' is an accidental COGNATE hit — the English surface form 'vomit' prefix-matches it, so the deterministic path recovers one keyword here without translating. Unplanned but correct; measured by test_non_english_coverage_gap_is_quantified.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "es-sore-throat",
+      "text": "Tengo dolor de garganta y me duele al tragar",
+      "declared_language": "es",
+      "gold_language": "es",
+      "gold_keywords": [
+        "sore throat"
+      ],
+      "is_voice": false,
+      "notes": "Low-acuity Spanish case.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "zh-chest-pain",
+      "text": "我胸口很痛，不能呼吸",
+      "declared_language": "zh",
+      "gold_language": "zh",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "Chinese emergency. Script detection must be exact.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "zh-fever-cough-declared-wrong",
+      "text": "我发烧和咳嗽三天了",
+      "declared_language": "en",
+      "gold_language": "zh",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "WRONG DECLARATION plus non-Latin script — script must win over the declaration.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "zh-headache",
+      "text": "我头痛得很厉害",
+      "declared_language": "zh",
+      "gold_language": "zh",
+      "gold_keywords": [
+        "headache"
+      ],
+      "is_voice": false,
+      "notes": "Short Chinese utterance.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "zh-vomiting",
+      "text": "我一直呕吐，没有胃口",
+      "declared_language": "zh",
+      "gold_language": "zh",
+      "gold_keywords": [
+        "vomiting"
+      ],
+      "is_voice": false,
+      "notes": "Chinese, moderate acuity.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "zh-sore-throat",
+      "text": "我喉咙痛，吞咽困难",
+      "declared_language": "zh",
+      "gold_language": "zh",
+      "gold_keywords": [
+        "sore throat"
+      ],
+      "is_voice": false,
+      "notes": "Low-acuity Chinese case.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ms-chest-pain",
+      "text": "Saya sakit dada dan susah bernafas",
+      "declared_language": "ms",
+      "gold_language": "ms",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "Malay emergency — a very likely real presentation in Singapore.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ms-fever-cough-declared-wrong",
+      "text": "Saya demam dan batuk sejak tiga hari",
+      "declared_language": "en",
+      "gold_language": "ms",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "WRONG DECLARATION, Latin script — this one relies entirely on marker words.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ms-headache",
+      "text": "Kepala saya sakit sangat",
+      "declared_language": "ms",
+      "gold_language": "ms",
+      "gold_keywords": [
+        "headache"
+      ],
+      "is_voice": false,
+      "notes": "Short Malay utterance.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ms-vomiting",
+      "text": "Saya muntah dan tidak boleh makan",
+      "declared_language": "ms",
+      "gold_language": "ms",
+      "gold_keywords": [
+        "vomiting"
+      ],
+      "is_voice": false,
+      "notes": "Malay, moderate acuity.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "fr-chest-pain",
+      "text": "J'ai une douleur dans la poitrine et je ne peux pas respirer",
+      "declared_language": "fr",
+      "gold_language": "fr",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "French emergency.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "fr-headache-accents",
+      "text": "J'ai mal à la tête depuis trois jours",
+      "declared_language": "fr",
+      "gold_language": "fr",
+      "gold_keywords": [
+        "headache"
+      ],
+      "is_voice": false,
+      "notes": "ACCENT FOLDING TEST — 'tête' must match the unaccented marker 'tete'.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "fr-fever-cough",
+      "text": "J'ai de la fièvre et une toux depuis hier",
+      "declared_language": "fr",
+      "gold_language": "fr",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "Accented French with two symptoms.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ta-chest-pain",
+      "text": "எனக்கு நெஞ்சு வலி, மூச்சு விட முடியவில்லை",
+      "declared_language": "ta",
+      "gold_language": "ta",
+      "gold_keywords": [
+        "chest pain",
+        "breathlessness"
+      ],
+      "is_voice": false,
+      "notes": "TAMIL EMERGENCY. One of Singapore's four official languages; the reason ta was added to _LANGUAGE_HINTS.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ta-fever-cough-declared-wrong",
+      "text": "எனக்கு காய்ச்சல் மற்றும் இருமல் இருக்கிறது",
+      "declared_language": "en",
+      "gold_language": "ta",
+      "gold_keywords": [
+        "fever",
+        "cough"
+      ],
+      "is_voice": false,
+      "notes": "WRONG DECLARATION — Tamil script must override it, same as Chinese.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ta-headache",
+      "text": "எனக்கு கடுமையான தலைவலி",
+      "declared_language": "ta",
+      "gold_language": "ta",
+      "gold_keywords": [
+        "headache"
+      ],
+      "is_voice": false,
+      "notes": "Short Tamil utterance.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ta-abdominal-pain",
+      "text": "எனக்கு வயிற்று வலி மிகவும் அதிகமாக உள்ளது",
+      "declared_language": "ta",
+      "gold_language": "ta",
+      "gold_keywords": [
+        "abdominal pain"
+      ],
+      "is_voice": false,
+      "notes": "Tamil, moderate acuity.",
+      "deterministic_expected": false
+    },
+    {
+      "id": "ta-sore-throat",
+      "text": "எனக்கு தொண்டை வலி இருக்கிறது",
+      "declared_language": "ta",
+      "gold_language": "ta",
+      "gold_keywords": [
+        "sore throat"
+      ],
+      "is_voice": false,
+      "notes": "Low-acuity Tamil case, so the set is not all emergencies.",
+      "deterministic_expected": false
+    }
+  ]
+}

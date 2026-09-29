@@ -1,0 +1,62 @@
+flowchart LR
+    subgraph PIPE["CareRoute AI — the patient journey"]
+        direction TB
+        A@{ icon: "mdi:account-voice", form: "square", label: "Patient describes symptoms", pos: "b" }
+        B@{ icon: "mdi:speedometer-slow", form: "square", label: "Rate limiter", pos: "b" }
+        C@{ icon: "mdi:shield-alert", form: "square", label: "Input guardrail", pos: "b" }
+        X@{ icon: "mdi:cancel", form: "square", label: "Refused, with a reason", pos: "b" }
+        D@{ icon: "mdi:eye-off", form: "square", label: "PII redaction", pos: "b" }
+        E@{ icon: "mdi:text-search", form: "square", label: "1 · Symptom-Intake", pos: "b" }
+        F@{ icon: "mdi:brain", form: "square", label: "2 · Severity-Classifier", pos: "b" }
+        G@{ icon: "mdi:alert-octagon", form: "square", label: "3 · Safety-Override", pos: "b" }
+        H@{ icon: "mdi:map-marker-radius", form: "square", label: "4 · Care-Routing", pos: "b" }
+        I@{ icon: "mdi:account-supervisor", form: "square", label: "5 · Human-in-the-Loop", pos: "b" }
+        J@{ icon: "mdi:magnify-scan", form: "square", label: "6 · Reflection", pos: "b" }
+        K@{ icon: "mdi:call-split", form: "square", label: "Escalated?", pos: "b" }
+        L@{ icon: "mdi:clipboard-pulse", form: "square", label: "7 · Clinician-Handoff", pos: "b" }
+        M@{ icon: "mdi:shield-check", form: "square", label: "Output guardrail", pos: "b" }
+        N@{ icon: "mdi:doctor", form: "square", label: "Clinician decides", pos: "b" }
+        O@{ icon: "mdi:clipboard-text", form: "square", label: "Patient sees the result", pos: "b" }
+        P@{ icon: "mdi:database-lock", form: "square", label: "Store + audit log", pos: "b" }
+
+        A --> B --> C
+        C -->|blocked| X
+        C -->|clean| D --> E --> F --> G --> H --> I --> J --> K
+        K -->|yes| L
+        K -->|no| M
+        L --> N
+        L --> M
+        M --> O
+        N -.-> P
+        O -.-> P
+    end
+
+    subgraph STEPS["What happens at each step"]
+        direction TB
+        S1["<b>Before any agent runs</b><br>rate limit → 6-layer input guardrail (+ decoding of disguised attacks) → PII redaction<br>an attack is refused here and no agent ever sees it<br>the masked text is what everything downstream reads"]
+        S2["<b>1 · Symptom-Intake</b> — agent, L2<br>turns messy, multilingual free text into one clean<br>clinical sentence plus keywords. Also the orchestrator:<br>it runs the workers in a fixed, safety-gated order"]
+        S3["<b>2 · Severity-Classifier</b> — agent, L2<br>the only trained model. RandomForest → acuity P1–P5<br>with a confidence and a real SHAP explanation.<br>Falls back to an LLM, then to keyword rules"]
+        S4["<b>3 · Safety-Override</b> — agent, L2 over an L1 floor<br>deterministic red-flag rules that can ONLY raise acuity.<br>A semantic NLP layer may add concerns on top<br>but can never remove the rules underneath"]
+        S5["<b>4 · Care-Routing</b> — agent, L2<br>maps final acuity to a care tier, then picks a real,<br>verified, currently-open clinic with a travel estimate.<br>Degrades to a labelled estimate, never a fabricated route"]
+        S6["<b>5 · Human-in-the-Loop</b> — policy node<br>escalates on low confidence or a safety trigger.<br>Deliberately deterministic: the rule for 'get a human'<br>should be inspectable and stable"]
+        S7["<b>6 · Reflection / Critic</b> — policy node<br>re-checks the assembled decision and can only make it<br>MORE cautious — e.g. forcing escalation of an<br>un-escalated P1/P2. Bounded: 1 iteration by default"]
+        S8["<b>7 · Clinician-Handoff</b> — agent, L2<br>runs ONLY when a case is escalated. Builds the packet<br>the clinician reads: summary, evidence, citations, SHAP.<br>Checked for faithfulness by evaluation E8"]
+        S9["<b>Before the patient sees anything</b><br>the output guardrail screens the rationale for prompt-leak.<br>Every step is written to a SHA-256 hash-chained audit log,<br>and the clinician's decision becomes ground truth"]
+        S1 ~~~ S2 ~~~ S3 ~~~ S4 ~~~ S5 ~~~ S6 ~~~ S7 ~~~ S8 ~~~ S9
+    end
+
+    PIPE ~~~ STEPS
+
+    style PIPE fill:#f7f5ff,stroke:#9673a6
+    style STEPS fill:#f2f7ff,stroke:#6c8ebf
+    style X fill:#ffd9d9
+    style G fill:#ffe6cc
+    style S1 fill:#ffffff,stroke:#cccccc
+    style S2 fill:#ffffff,stroke:#cccccc
+    style S3 fill:#ffffff,stroke:#cccccc
+    style S4 fill:#ffffff,stroke:#cccccc
+    style S5 fill:#ffffff,stroke:#cccccc
+    style S6 fill:#ffffff,stroke:#cccccc
+    style S7 fill:#ffffff,stroke:#cccccc
+    style S8 fill:#ffffff,stroke:#cccccc
+    style S9 fill:#ffffff,stroke:#cccccc

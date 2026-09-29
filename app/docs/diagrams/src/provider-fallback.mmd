@@ -1,0 +1,12 @@
+flowchart LR
+    R@{ icon: "mdi:help-circle", form: "square", label: "A worker needs to reason", pos: "b" }
+    P1@{ icon: "mdi:cloud-outline", form: "square", label: "OpenAI API", pos: "b" }
+    DET@{ icon: "mdi:cog", form: "square", label: "Deterministic rules", pos: "b" }
+    KILL@{ icon: "mdi:power-plug-off", form: "square", label: "Kill switch", pos: "b" }
+    OK@{ icon: "mdi:check-circle", form: "square", label: "Result", pos: "b" }
+
+    R --> P1
+    P1 -->|fails or breaker open| DET
+    P1 -->|works| OK
+    DET --> OK
+    KILL -.->|forces| DET

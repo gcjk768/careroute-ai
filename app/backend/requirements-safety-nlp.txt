@@ -1,0 +1,20 @@
+# Optional Safety NLP dependencies (NER, assertion, BioLORD similarity).
+#
+# Installed ONLY by `docker build --build-arg WITH_SAFETY_NLP=1` (stage
+# nlp-builder), which also bakes the pinned model artifacts in. The default
+# monolith, CI tests and the per-agent images do not: the deterministic runtime and normal tests must continue to
+# work without this file, and /api/health then reports safetyNlp="rules".
+#
+# torch is the CPU-only build. PyPI's Linux torch wheel is the CUDA build and
+# drags in ~3 GB of nvidia-* wheels Fargate can never use, so the Dockerfile
+# installs torch==<this>+cpu from download.pytorch.org/whl/cpu with --no-deps
+# FIRST; `torch==2.14.0` below is then already satisfied by the +cpu build.
+#
+# Exact pins resolved together with requirements.txt + requirements-agentic.txt
+# (pip check clean). transformers stays on 4.x (this file's original <5 range),
+# so sentence-transformers stays on 5.x: 6.x requires transformers 5.
+torch==2.14.0
+transformers==4.57.6
+sentence-transformers==5.7.0
+sentencepiece==0.2.2
+safetensors==0.5.3

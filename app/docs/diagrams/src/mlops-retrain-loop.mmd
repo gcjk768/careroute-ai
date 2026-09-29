@@ -1,0 +1,18 @@
+flowchart LR
+    SERVE["Serving<br>real predictions"] --> LOG["Inference log<br>de-identified"]
+    LOG --> MON["Monitor<br>Evidently / PSI"]
+    MON --> CHK{"Drift over<br>threshold?"}
+    CHK -->|no| SERVE
+    CHK -->|yes| TRIG["Trigger retrain<br>loop-guarded"]
+    TRIG --> TRAIN["Retrain, seeded"]
+    TRAIN --> GATE{"Clears the<br>release gates?"}
+    GATE -->|no| STOP["Rejected<br>old model stays"]
+    GATE -->|yes| REG["Register in MLflow"]
+    REG --> CC{"Beats the<br>current champion?"}
+    CC -->|no| STOP
+    CC -->|yes| PROD["Promote to production"]
+    PROD --> SERVE
+    HITL["Clinician decisions<br>ground truth"] --> MON
+    style STOP fill:#ffd9d9
+    style PROD fill:#d5e8d4
+    style HITL fill:#fff2cc

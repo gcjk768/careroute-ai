@@ -1,0 +1,1175 @@
+{
+  "schemaVersion": 1,
+  "description": "Synthetic Safety-Override context benchmark for Phase 3. Labels are not clinically reviewed yet.",
+  "clinicalReview": {
+    "status": "unavailable_not_clinically_validated",
+    "reviewer": null,
+    "reviewedAt": null,
+    "note": "Clinician review is unavailable in this project setting. This synthetic benchmark is for prototype schema and evaluation-plumbing checks only."
+  },
+  "cases": [
+    {
+      "id": "cardiac-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I have crushing chest pain going down my left arm.",
+      "referenceTranslation": null,
+      "category": "cardiac_chest_pain",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "crushing chest pain",
+          "start": 7,
+          "end": 26,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Current patient-owned chest pain should trigger cardiac safety override."
+    },
+    {
+      "id": "cardiac-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I do not have chest pain, only a mild sore throat.",
+      "referenceTranslation": null,
+      "category": "cardiac_chest_pain",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "chest pain",
+          "start": 14,
+          "end": 24,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit denial is a hard negative; the deterministic table honours a same-clause denial."
+    },
+    {
+      "id": "breathless-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I cannot breathe and my lips are turning blue.",
+      "referenceTranslation": null,
+      "category": "breathlessness",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "cannot breathe",
+          "start": 2,
+          "end": 16,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Current respiratory distress is P1 safety-relevant."
+    },
+    {
+      "id": "breathless-other-person-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "My brother cannot breathe, but I am calling for myself about a cough.",
+      "referenceTranslation": null,
+      "category": "breathlessness",
+      "assertion": "present",
+      "subject": "other_person",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "route_to_human_review",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "cannot breathe",
+          "start": 11,
+          "end": 25,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "The symptom belongs to another person, not the current care subject."
+    },
+    {
+      "id": "anaphylaxis-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "After peanuts, my throat is closing and my tongue is swelling.",
+      "referenceTranslation": null,
+      "category": "anaphylaxis",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "throat is closing",
+          "start": 18,
+          "end": 35,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "tongue is swelling",
+          "start": 43,
+          "end": 61,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Airway swelling after allergen exposure is a red flag."
+    },
+    {
+      "id": "anaphylaxis-remote-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "Ten years ago my throat was closing after peanuts, but today I have a rash only.",
+      "referenceTranslation": null,
+      "category": "anaphylaxis",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "remote",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "throat was closing",
+          "start": 17,
+          "end": 35,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Remote resolved airway symptoms should not create a new semantic trigger."
+    },
+    {
+      "id": "anaphylaxis-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "My tongue is not swelling; I only have itchy skin.",
+      "referenceTranslation": null,
+      "category": "anaphylaxis",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "tongue is not swelling",
+          "start": 3,
+          "end": 25,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit negation of airway swelling is a hard negative."
+    },
+    {
+      "id": "stroke-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My face is drooping and my speech is slurred right now.",
+      "referenceTranslation": null,
+      "category": "stroke_signs",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "face is drooping",
+          "start": 3,
+          "end": 19,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "speech is slurred",
+          "start": 27,
+          "end": 44,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Current FAST symptoms are safety red flags."
+    },
+    {
+      "id": "stroke-unknown-temporality-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I sometimes get one sided weakness, not sure when it last happened.",
+      "referenceTranslation": null,
+      "category": "stroke_signs",
+      "assertion": "possible",
+      "subject": "patient",
+      "temporality": "unknown",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "route_to_human_review",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "one sided weakness",
+          "start": 16,
+          "end": 34,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Unclear timing should be review telemetry, not autonomous suppression of deterministic hits."
+    },
+    {
+      "id": "stroke-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "No slurred speech or face droop.",
+      "referenceTranslation": null,
+      "category": "stroke_signs",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "slurred speech",
+          "start": 3,
+          "end": 17,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "face droop",
+          "start": 21,
+          "end": 31,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit denial of FAST symptoms is a hard negative for future semantic additions."
+    },
+    {
+      "id": "bleeding-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "The cut won't stop bleeding and blood is pooling on the floor.",
+      "referenceTranslation": null,
+      "category": "severe_bleeding",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "won't stop bleeding",
+          "start": 8,
+          "end": 27,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "blood is pooling",
+          "start": 32,
+          "end": 48,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Uncontrolled bleeding should trigger severe bleeding override."
+    },
+    {
+      "id": "bleeding-recent-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I was vomiting blood five minutes ago.",
+      "referenceTranslation": null,
+      "category": "severe_bleeding",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "recent",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "vomiting blood",
+          "start": 6,
+          "end": 20,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Very recent vomiting blood remains urgent."
+    },
+    {
+      "id": "self-harm-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I want to kill myself tonight.",
+      "referenceTranslation": null,
+      "category": "suicidal_ideation",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "kill myself",
+          "start": 10,
+          "end": 21,
+          "entityType": "Mental_health_risk"
+        }
+      ],
+      "rationale": "Current self-harm intent is safety-relevant."
+    },
+    {
+      "id": "self-harm-conditional-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "If this continues, I might kill myself.",
+      "referenceTranslation": null,
+      "category": "suicidal_ideation",
+      "assertion": "conditional",
+      "subject": "patient",
+      "temporality": "unknown",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "kill myself",
+          "start": 27,
+          "end": 38,
+          "entityType": "Mental_health_risk"
+        }
+      ],
+      "rationale": "Conditional self-harm remains urgent by explicit category policy."
+    },
+    {
+      "id": "seizure-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My child had a seizure five minutes ago and is not responding.",
+      "referenceTranslation": null,
+      "category": "seizure",
+      "assertion": "present",
+      "subject": "care_subject",
+      "temporality": "recent",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "seizure",
+          "start": 15,
+          "end": 22,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "The symptom belongs to the child being triaged."
+    },
+    {
+      "id": "seizure-remote-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I had a seizure ten years ago and feel fine today.",
+      "referenceTranslation": null,
+      "category": "seizure",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "remote",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "seizure",
+          "start": 8,
+          "end": 15,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Remote resolved seizure should not add a semantic trigger in Phase 3."
+    },
+    {
+      "id": "seizure-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I did not have a seizure.",
+      "referenceTranslation": null,
+      "category": "seizure",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "seizure",
+          "start": 17,
+          "end": 24,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit denial of seizure is a hard negative."
+    },
+    {
+      "id": "compositional-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I have no chest pain, but I cannot breathe.",
+      "referenceTranslation": null,
+      "category": "breathlessness",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "chest pain",
+          "start": 10,
+          "end": 20,
+          "entityType": "Sign_symptom",
+          "category": "cardiac_chest_pain",
+          "assertion": "negated"
+        },
+        {
+          "mentionId": "m2",
+          "text": "cannot breathe",
+          "start": 28,
+          "end": 42,
+          "entityType": "Sign_symptom",
+          "category": "breathlessness",
+          "assertion": "present"
+        }
+      ],
+      "rationale": "One symptom is negated while another active red flag is present."
+    },
+    {
+      "id": "hypothetical-cardiac-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "If I had chest pain, would it be serious?",
+      "referenceTranslation": null,
+      "category": "cardiac_chest_pain",
+      "assertion": "conditional",
+      "subject": "patient",
+      "temporality": "unknown",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "chest pain",
+          "start": 9,
+          "end": 19,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Hypothetical education-seeking should not add a semantic trigger."
+    },
+    {
+      "id": "unknown-subject-seizure-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "Someone here may be having a seizure.",
+      "referenceTranslation": null,
+      "category": "seizure",
+      "assertion": "possible",
+      "subject": "unknown",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": true,
+      "goldAction": "route_to_human_review",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "seizure",
+          "start": 29,
+          "end": 36,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Unknown ownership should route to review telemetry."
+    },
+    {
+      "id": "voice-variant-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "voice transcript says chest pane and cant breath after running.",
+      "referenceTranslation": null,
+      "category": "breathlessness",
+      "assertion": "possible",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "route_to_human_review",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "chest pane",
+          "start": 22,
+          "end": 32,
+          "entityType": "Sign_symptom",
+          "category": "cardiac_chest_pain"
+        },
+        {
+          "mentionId": "m2",
+          "text": "cant breath",
+          "start": 37,
+          "end": 48,
+          "entityType": "Sign_symptom",
+          "category": "breathlessness"
+        }
+      ],
+      "rationale": "Voice transcription variants should be measured as semantic recall gaps."
+    },
+    {
+      "id": "code-switched-ms-en-01",
+      "partition": "development",
+      "language": "ms",
+      "text": "Saya chest pain sekarang and rasa sesak nafas.",
+      "referenceTranslation": "I have chest pain now and feel short of breath.",
+      "category": "cardiac_chest_pain",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "chest pain",
+          "start": 5,
+          "end": 15,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "sesak nafas",
+          "start": 34,
+          "end": 45,
+          "entityType": "Sign_symptom",
+          "category": "breathlessness"
+        }
+      ],
+      "rationale": "Code-switched input should preserve both critical symptoms."
+    },
+    {
+      "id": "cardiac-active-zh-01",
+      "partition": "development",
+      "language": "zh",
+      "text": "我现在胸痛，呼吸困难。",
+      "referenceTranslation": "I have chest pain now and difficulty breathing.",
+      "category": "cardiac_chest_pain",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": false,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "胸痛",
+          "start": 3,
+          "end": 5,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Mandarin current chest pain should be detected by future multilingual channels."
+    },
+    {
+      "id": "breathless-negated-zh-01",
+      "partition": "holdout",
+      "language": "zh",
+      "text": "我没有呼吸困难，只是咳嗽。",
+      "referenceTranslation": "I do not have difficulty breathing, only a cough.",
+      "category": "breathlessness",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "呼吸困难",
+          "start": 3,
+          "end": 7,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Mandarin negation should prevent a new semantic trigger."
+    },
+    {
+      "id": "stroke-active-ms-01",
+      "partition": "development",
+      "language": "ms",
+      "text": "Muka saya senget dan pertuturan tidak jelas sekarang.",
+      "referenceTranslation": "My face is drooping and speech is unclear now.",
+      "category": "stroke_signs",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": false,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "Muka saya senget",
+          "start": 0,
+          "end": 16,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "pertuturan tidak jelas",
+          "start": 21,
+          "end": 43,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Malay FAST symptoms should be language-covered."
+    },
+    {
+      "id": "bleeding-negated-ms-01",
+      "partition": "holdout",
+      "language": "ms",
+      "text": "Pendarahan sudah berhenti, tiada darah sekarang.",
+      "referenceTranslation": "The bleeding has stopped, there is no blood now.",
+      "category": "severe_bleeding",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "Pendarahan",
+          "start": 0,
+          "end": 10,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Malay resolved/negated bleeding is a hard negative."
+    },
+    {
+      "id": "anaphylaxis-active-ta-01",
+      "partition": "development",
+      "language": "ta",
+      "text": "என் தொண்டை மூடுவது போல உள்ளது மற்றும் நாக்கு வீங்குகிறது.",
+      "referenceTranslation": "My throat feels like it is closing and my tongue is swelling.",
+      "category": "anaphylaxis",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": false,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "தொண்டை மூடுவது",
+          "start": 4,
+          "end": 18,
+          "entityType": "Sign_symptom"
+        },
+        {
+          "mentionId": "m2",
+          "text": "நாக்கு வீங்குகிறது",
+          "start": 38,
+          "end": 56,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Tamil airway swelling should be detected by future multilingual channels."
+    },
+    {
+      "id": "self-harm-negated-ta-01",
+      "partition": "holdout",
+      "language": "ta",
+      "text": "எனக்கு என்னை கொல்ல வேண்டும் என்ற எண்ணம் இல்லை.",
+      "referenceTranslation": "I do not have thoughts of wanting to kill myself.",
+      "category": "suicidal_ideation",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": {
+        "symptom": true,
+        "polarity": true,
+        "subject": true,
+        "temporality": true
+      },
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "என்னை கொல்ல",
+          "start": 7,
+          "end": 18,
+          "entityType": "Mental_health_risk"
+        }
+      ],
+      "rationale": "Tamil negated self-harm is a hard negative."
+    },
+    {
+      "id": "unresponsive-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My father collapsed and is not responding.",
+      "referenceTranslation": null,
+      "category": "unresponsive",
+      "assertion": "present",
+      "subject": "other_person",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "not responding",
+          "start": 27,
+          "end": 41,
+          "entityType": "Sign_symptom",
+          "category": "unresponsive"
+        }
+      ],
+      "rationale": "Not responding after a collapse is a resuscitation-level presentation however it is phrased."
+    },
+    {
+      "id": "unresponsive-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "He is not unresponsive, he is just sleeping deeply.",
+      "referenceTranslation": null,
+      "category": "unresponsive",
+      "assertion": "negated",
+      "subject": "other_person",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "unresponsive",
+          "start": 10,
+          "end": 22,
+          "entityType": "Sign_symptom",
+          "category": "unresponsive"
+        }
+      ],
+      "rationale": "Explicit denial of unresponsiveness is a hard negative."
+    },
+    {
+      "id": "choking-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My son is choking on a piece of food.",
+      "referenceTranslation": null,
+      "category": "choking",
+      "assertion": "present",
+      "subject": "care_subject",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "choking",
+          "start": 10,
+          "end": 17,
+          "entityType": "Sign_symptom",
+          "category": "choking"
+        }
+      ],
+      "rationale": "Choking is an airway emergency; the word alone must reach the floor."
+    },
+    {
+      "id": "choking-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "She is not choking, she just coughed once.",
+      "referenceTranslation": null,
+      "category": "choking",
+      "assertion": "negated",
+      "subject": "care_subject",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "choking",
+          "start": 11,
+          "end": 18,
+          "entityType": "Sign_symptom",
+          "category": "choking"
+        }
+      ],
+      "rationale": "Explicit denial of choking is a hard negative."
+    },
+    {
+      "id": "overdose-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I took 40 panadol tablets an hour ago.",
+      "referenceTranslation": null,
+      "category": "poisoning_overdose",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "took 40 panadol tablets",
+          "start": 2,
+          "end": 25,
+          "entityType": "Sign_symptom",
+          "category": "poisoning_overdose"
+        }
+      ],
+      "rationale": "A stated tablet count is how patients report an overdose; the textbook word is rarely used."
+    },
+    {
+      "id": "overdose-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I did not overdose, I took the normal dose.",
+      "referenceTranslation": null,
+      "category": "poisoning_overdose",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "overdose",
+          "start": 10,
+          "end": 18,
+          "entityType": "Sign_symptom",
+          "category": "poisoning_overdose"
+        }
+      ],
+      "rationale": "Explicit denial of an overdose is a hard negative."
+    },
+    {
+      "id": "obstetric-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I am pregnant and bleeding heavily since this morning.",
+      "referenceTranslation": null,
+      "category": "obstetric_bleeding",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "pregnant and bleeding",
+          "start": 5,
+          "end": 26,
+          "entityType": "Sign_symptom",
+          "category": "obstetric_bleeding"
+        }
+      ],
+      "rationale": "Bleeding in pregnancy needs immediate obstetric assessment."
+    },
+    {
+      "id": "obstetric-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "No bleeding, and I am pregnant.",
+      "referenceTranslation": null,
+      "category": "obstetric_bleeding",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "bleeding",
+          "start": 3,
+          "end": 11,
+          "entityType": "Sign_symptom",
+          "category": "obstetric_bleeding"
+        }
+      ],
+      "rationale": "Explicit denial of bleeding in pregnancy is a hard negative."
+    },
+    {
+      "id": "altered-consciousness-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My 2 year old has a high fever and is very drowsy and hard to wake up.",
+      "referenceTranslation": null,
+      "category": "altered_consciousness",
+      "assertion": "present",
+      "subject": "care_subject",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "hard to wake",
+          "start": 54,
+          "end": 66,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Reduced consciousness in a febrile child (live scenario 2026-09-24)."
+    },
+    {
+      "id": "altered-consciousness-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "He has a cold but he is not hard to wake and is playing normally.",
+      "referenceTranslation": null,
+      "category": "altered_consciousness",
+      "assertion": "negated",
+      "subject": "care_subject",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "hard to wake",
+          "start": 28,
+          "end": 40,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit denial of reduced consciousness."
+    },
+    {
+      "id": "head-injury-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "My 80 year old father fell, hit his head and keeps vomiting.",
+      "referenceTranslation": null,
+      "category": "head_injury",
+      "assertion": "present",
+      "subject": "care_subject",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "hit his head",
+          "start": 28,
+          "end": 40,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Head injury with vomiting in an older adult (live scenario 2026-09-24)."
+    },
+    {
+      "id": "head-injury-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I bumped my head on a cupboard, no confusion and no vomiting.",
+      "referenceTranslation": null,
+      "category": "head_injury",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "bumped my head",
+          "start": 2,
+          "end": 16,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Minor bump with danger signs explicitly denied."
+    },
+    {
+      "id": "meningitis-active-en-01",
+      "partition": "development",
+      "language": "en",
+      "text": "I have a high fever and a stiff neck since this morning.",
+      "referenceTranslation": null,
+      "category": "meningitis_sepsis",
+      "assertion": "present",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": true,
+      "regexTriggers": true,
+      "goldAction": "add_or_confirm_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "stiff neck",
+          "start": 26,
+          "end": 36,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Fever with neck stiffness is a meningitis red flag."
+    },
+    {
+      "id": "meningitis-negated-en-01",
+      "partition": "holdout",
+      "language": "en",
+      "text": "I have a fever but no stiff neck and no rash.",
+      "referenceTranslation": null,
+      "category": "meningitis_sepsis",
+      "assertion": "negated",
+      "subject": "patient",
+      "temporality": "current",
+      "goldTrigger": false,
+      "regexTriggers": false,
+      "goldAction": "do_not_add_semantic_trigger",
+      "translationPreserved": null,
+      "mentions": [
+        {
+          "mentionId": "m1",
+          "text": "stiff neck",
+          "start": 22,
+          "end": 32,
+          "entityType": "Sign_symptom"
+        }
+      ],
+      "rationale": "Explicit denial of neck stiffness is a hard negative."
+    }
+  ]
+}

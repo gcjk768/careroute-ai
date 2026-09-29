@@ -1,0 +1,46 @@
+flowchart LR
+    subgraph PIPE["CareRoute AI — MLSecOps pipeline (GitLab)"]
+        direction TB
+        SRC@{ icon: "logos:gitlab", form: "square", label: "Source · push / MR", pos: "r" }
+        L@{ icon: "simple-icons:ruff", form: "square", label: "1 · lint — ruff", pos: "r" }
+        T@{ icon: "simple-icons:mlflow", form: "square", label: "2 · train — scikit-learn + MLflow", pos: "r" }
+        TE@{ icon: "simple-icons:pytest", form: "square", label: "3 · test — pytest + DVC lineage", pos: "r" }
+        M@{ icon: "mdi:chart-line", form: "square", label: "4 · monitor — Evidently drift", pos: "r" }
+        AI@{ icon: "simple-icons:owasp", form: "square", label: "5 · ai-security — Fairlearn + red-team", pos: "r" }
+        SC@{ icon: "simple-icons:trivy", form: "square", label: "6 · security-scan — Trivy + Gitleaks", pos: "r" }
+        R@{ icon: "mdi:file-document", form: "square", label: "7 · report — executive PDF", pos: "r" }
+        BU@{ icon: "logos:docker-icon", form: "square", label: "8 · build — 12 images + image scan + compose smoke", pos: "r" }
+        D@{ icon: "mdi:rocket-launch", form: "square", label: "9 · deploy — push → trigger infra → verified rollout", pos: "r" }
+        P@{ icon: "simple-icons:owasp", form: "square", label: "10 · post-deploy — ZAP DAST", pos: "r" }
+        SRC --> L --> T --> TE --> M --> AI --> SC --> R --> BU --> D --> P
+    end
+
+    subgraph GATES["Stages &amp; gates"]
+        direction TB
+        G1["<b>1 · lint</b> — BLOCKING<br><b>ruff</b>, pinned to 0.16.3, rule set declared in ruff.toml<br>so the gate cannot go red on someone else's release"]
+        G2["<b>2 · train</b> — the one place a model is built<br><b>scikit-learn</b> seeded train → release gate (acc ≥ 0.75,<br>red-flag recall ≥ 0.95) → content-addressed joblib + SHA-256<br>→ registered in <b>MLflow</b>. A failing model is never persisted"]
+        G3["<b>3 · test</b> — BLOCKING<br><b>pytest</b>: train/serve skew contract, then the model-quality gate ·<br>data validation · 80% coverage · safety + Safety-NLP benchmark<br>plus the <b>DVC</b> data-lineage gate proving the dataset hash<br>equals the model's training hash · <b>Playwright</b> e2e<br><b>Schemathesis</b> API contract fuzzing (blocking)"]
+        G4["<b>4 · monitor</b><br><b>Evidently</b> drift + performance, PSI fallback<br>a breach beyond the threshold triggers a retrain<br>pipeline via the API, loop-guarded"]
+        G5["<b>5 · ai-security</b> — BLOCKING<br><b>Fairlearn</b> subgroup-parity gate · guardrail regression<br>plus <b>Promptfoo</b>, <b>Garak</b>, <b>DeepTeam</b> and <b>PyRIT</b><br>red-teaming, mapped to the <b>OWASP</b> LLM Top 10<br>PyRIT obfuscation probe: bypass ≤ 7% (advisory)"]
+        G6["<b>6 · security-scan</b> — BLOCKING<br><b>Gitleaks</b> secrets and <b>Trivy</b> CRITICAL CVEs block<br><b>Semgrep</b> · <b>Bandit</b> · pip-audit · modelscan · Hadolint<br>SBOM + AI-BOM · <b>OWASP ZAP</b> API + full scan (advisory)<br>— 30 scanner jobs, all free/open-source"]
+        G7["<b>7 · report</b><br>executive PDF + Markdown twin covering model quality,<br>gates, fairness, calibration, lineage, drift,<br>and a findings summary of every scanner result"]
+        G8["<b>8 · build</b><br><b>Docker</b>: 12 images (monolith, frontend, one per agent/service)<br>then <b>Trivy</b> and <b>Dockle</b> against the exact built images<br>and a compose smoke triage through all ten containers"]
+        G9["<b>9 · deploy</b><br>push-images: scanned images to immutable ECR by release tag<br>(VERSION-pipeline id + SHA, OIDC role) → ONE manual click,<br>trigger-infra → infra plan + apply + verified rollout;<br>shadow probe → champion–challenger promote; rollback re-applies<br>the previous verified tag and re-pins the previous model"]
+        G10["<b>10 · post-deploy</b><br><b>OWASP ZAP</b> DAST against the running app"]
+        G1 ~~~ G2 ~~~ G3 ~~~ G4 ~~~ G5 ~~~ G6 ~~~ G7 ~~~ G8 ~~~ G9 ~~~ G10
+    end
+
+    PIPE ~~~ GATES
+
+    style PIPE fill:#f7f5ff,stroke:#9673a6
+    style GATES fill:#f2f7ff,stroke:#6c8ebf
+    style G1 fill:#ffffff,stroke:#cccccc
+    style G2 fill:#ffffff,stroke:#cccccc
+    style G3 fill:#ffffff,stroke:#cccccc
+    style G4 fill:#ffffff,stroke:#cccccc
+    style G5 fill:#ffffff,stroke:#cccccc
+    style G6 fill:#ffffff,stroke:#cccccc
+    style G7 fill:#ffffff,stroke:#cccccc
+    style G8 fill:#ffffff,stroke:#cccccc
+    style G9 fill:#ffffff,stroke:#cccccc
+    style G10 fill:#ffffff,stroke:#cccccc

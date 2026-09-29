@@ -1,0 +1,31 @@
+# Keep the build context small + leak-free. The Dockerfile only needs
+# requirements.txt + app/ (the model is trained inside the builder stage).
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+models/
+# ...except the Safety-NLP manifest: the governance record that pins the model
+# revisions + hashes the monolith image downloads at build time.
+!models/safety/manifest.json
+mlruns/
+monitoring/
+data/
+# ...except the reviewed GoWhere opening-hours snapshot, which is RUNTIME data,
+# not a build artifact. `data/` excluded it from the context entirely, so
+# gpgowhere.SNAPSHOT_PATH did not exist in the image and profiles() returned []
+# — silently disabling the closed-clinic filter, i.e. the container could route
+# a patient to a shut clinic. (The .npz training snapshot stays excluded: it is
+# 6000 synthetic rows the runtime never reads.)
+!data/gpgowhere_hours.json
+tests/
+.env
+.env.*
+*.md
+requirements-dev.txt
+requirements-mlops.txt

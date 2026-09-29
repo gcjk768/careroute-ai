@@ -1,0 +1,37 @@
+flowchart LR
+  USER["Patients · clinicians"]
+  subgraph EDGE["Edge"]
+    WAF["AWS WAF + CloudFront"]
+    ALB["Application Load Balancer<br/>TLS · sticky SSE"]
+  end
+  subgraph ECS["ECS Fargate (2 AZ)"]
+    FE["frontend task<br/>Next standalone · 2×"]
+    BE["backend task<br/>FastAPI + agents · 2–6× autoscaled"]
+  end
+  subgraph DATA["State"]
+    RDS["RDS Postgres + pgvector<br/>cases · escalations · audit chain · RAG vectors"]
+    S3["S3<br/>model artifacts · DVC remote · reports"]
+    SM["Secrets Manager<br/>staff key · provider keys · OneMap"]
+  end
+  subgraph MLOPS["MLOps plane"]
+    MLF["MLflow tracking + registry<br/>(ECS service, RDS-backed)"]
+    CI["GitLab CI → ECR<br/>train · gate · canary · rollback"]
+  end
+  subgraph OBS["Observability"]
+    AMP["Managed Prometheus"]
+    AMG["Managed Grafana + alerts"]
+    CW["CloudWatch logs (aggregated)"]
+  end
+  EXT["External: LLM provider · OneMap"]
+
+  USER --> WAF --> ALB
+  ALB --> FE --> BE
+  BE --> RDS
+  BE --> S3
+  BE --> SM
+  BE -. HTTPS .-> EXT
+  CI --> ECS
+  CI --> MLF
+  MLF --> S3
+  BE -- /metrics --> AMP --> AMG
+  BE --> CW

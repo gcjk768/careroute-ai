@@ -1,0 +1,57 @@
+flowchart TD
+    subgraph CLIENT["1 · Browser"]
+        direction LR
+        UI@{ icon: "mdi:account", form: "square", label: "Patient page", pos: "b" }
+        STAFF@{ icon: "mdi:doctor", form: "square", label: "Staff portal · login", pos: "b" }
+    end
+
+    subgraph FE["2 · Frontend · Next.js :5173"]
+        direction LR
+        NEXT@{ icon: "simple-icons:nextdotjs", form: "square", label: "App Router + CSS Modules", pos: "b" }
+        PROXY@{ icon: "mdi:swap-horizontal", form: "square", label: "/api rewrite proxy", pos: "b" }
+    end
+
+    subgraph BE["3 · Backend · FastAPI :8000"]
+        direction LR
+        GUARD@{ icon: "logos:fastapi", form: "square", label: "rate limit · guardrail · redaction", pos: "b" }
+        AGENTS@{ icon: "mdi:robot", form: "square", label: "7 agents + A2A bus — in-process, or 1 container each", pos: "b" }
+        SSE@{ icon: "mdi:transit-connection-variant", form: "square", label: "SSE · 10s keepalive", pos: "b" }
+        GUARD --> AGENTS --> SSE
+    end
+
+    subgraph DATA["4 · State &amp; evidence"]
+        direction LR
+        ML@{ icon: "simple-icons:scikitlearn", form: "square", label: "RandomForest + SHAP", pos: "b" }
+        RAG@{ icon: "mdi:book-search", form: "square", label: "Hybrid RAG — dense + TF-IDF, fused by RRF", pos: "b" }
+        STORE@{ icon: "mdi:database", form: "square", label: "cases · escalations · memory", pos: "b" }
+        AUDIT@{ icon: "mdi:database-lock", form: "square", label: "hash-chained audit", pos: "b" }
+        REDIS@{ icon: "simple-icons:redis", form: "square", label: "Redis write-through — survives a restart", pos: "b" }
+    end
+
+    subgraph EXT["5 · External — every one optional"]
+        direction LR
+        LLM@{ icon: "logos:openai-icon", form: "square", label: "OpenAI API (the only LLM provider)", pos: "b" }
+        MAP@{ icon: "mdi:map-marker-radius", form: "square", label: "OneMap travel + routing", pos: "b" }
+    end
+
+    subgraph OBS["6 · Observability · docker compose"]
+        direction LR
+        PROM@{ icon: "simple-icons:prometheus", form: "square", label: "Prometheus :9090", pos: "b" }
+        ALERT@{ icon: "mdi:bell-alert", form: "square", label: "Alertmanager :9093", pos: "b" }
+        GRAF@{ icon: "simple-icons:grafana", form: "square", label: "Grafana :3000", pos: "b" }
+        PROM --> ALERT
+        PROM --> GRAF
+    end
+
+    CLIENT -->|"symptom text"| FE
+    FE <-->|"proxied /api · SSE events stream back"| BE
+    BE --> DATA
+    BE -.->|"LLM-first, always falls back"| EXT
+    BE -->|"/metrics"| OBS
+
+    style BE fill:#f7f5ff,stroke:#9673a6
+    style DATA fill:#fffbf0,stroke:#d6b656
+    style EXT fill:#f5f5f5,stroke:#999999
+    style OBS fill:#f2f7ff,stroke:#6c8ebf
+    style CLIENT fill:#eef4ff,stroke:#6c8ebf
+    style FE fill:#eef4ff,stroke:#6c8ebf

@@ -1,0 +1,14 @@
+flowchart LR
+    T@{ icon: "mdi:account-voice", form: "square", label: "Patient text", pos: "b" } --> L1@{ icon: "mdi:alert-octagon", form: "square", label: "L1 red-flag rules", pos: "b" }
+    T --> L2@{ icon: "mdi:comment-search", form: "square", label: "L2 Safety-NLP", pos: "b" }
+    L1 --> F["Floor:<br>rules that fired"]
+    L2 --> ADD["May ADD<br>more concerns"]
+    F --> M["Merge"]
+    ADD --> M
+    M --> R{"Any red flag?"}
+    R -->|yes| UP["RAISE acuity<br>never lower"]
+    R -->|no| KEEP["Leave it alone"]
+    UP --> O["safety.override"]
+    KEEP --> O
+    style L1 fill:#ffe6cc
+    style UP fill:#ffd9d9

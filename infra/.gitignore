@@ -1,0 +1,40 @@
+# ── Terraform / Terragrunt ───────────────────────────────────────────────────
+# Provider plugins & local state
+.terraform/
+# NOT ignored: .terraform.lock.hcl. It is the only thing that pins provider
+# PATCH versions, and "keep everything versioned — code, configuration,
+# infrastructure" is the point of the repo. Un-pinned, CI can resolve a
+# different aws provider build than a developer got, which is precisely the
+# "works on my machine" class of failure IaC exists to remove. Terragrunt copies
+# the module directory into .terragrunt-cache before running terraform, so the
+# lock file committed next to modules/careroute_stack/*.tf is the one that
+# takes effect.
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Terragrunt cache (downloaded module copies + generated backend.tf/provider.tf)
+.terragrunt-cache/
+
+# Generated files (created by root.hcl at apply time)
+backend.tf
+provider.tf
+
+# Variable files that may hold secrets — commit *.example only
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Plan output
+*.tfplan
+plan.out
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local provider key used by scripts/ — never commit (gitleaks is a HARD gate in CI).
+.openai_key

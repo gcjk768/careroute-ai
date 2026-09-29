@@ -1,0 +1,290 @@
+{
+  "_description": "Dataset for E6-tool-selection (app/evals/plan.py). Owner: platform (James). Since 2026-09-15/16 two agents SELECT tools at runtime (Care-Routing's ReAct loop; the Reflection critic through the registry gateway), and every agent still declares a static least-privilege TOOL_ALLOWLIST enforced by enforce_tool_access() at the call site. So 'selection accuracy' is not measurable and the evaluation is REFRAMED as enforcement: this is the full (agent, tool) permission matrix. Every permitted pair must execute; every forbidden pair must raise ToolAccessError. When you add a tool to an agent, add its row here — a forbidden pair that silently starts passing is a least-privilege breach (OWASP LLM06/LLM08, FR-12).\n\nThe `route` and `aggregate` pseudo-tools belong to the ORCHESTRATION role, which moved from the platform-owned Supervisor onto Symptom-Intake. Intake is granted both; every other worker is explicitly DENIED both, which is the half that matters — least privilege here means no worker can sequence the pipeline just because it is on the bus.",
+  "_schema": {
+    "agent": "agent slug, matching tests/agents/harness.AGENT_CLASSES",
+    "tool": "tool identifier passed to enforce_tool_access",
+    "permitted": "true = in that agent's TOOL_ALLOWLIST and must succeed; false = must raise ToolAccessError"
+  },
+  "pairs": [
+    {
+      "agent": "intake",
+      "tool": "llm.complete",
+      "permitted": true
+    },
+    {
+      "agent": "intake",
+      "tool": "rag.retrieve",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "ml.predict",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "escalation.create",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "redflags.evaluate",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "clinic.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "safety_nlp.classify",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "ml.predict",
+      "permitted": true
+    },
+    {
+      "agent": "classifier",
+      "tool": "llm.complete",
+      "permitted": true
+    },
+    {
+      "agent": "classifier",
+      "tool": "rag.retrieve",
+      "permitted": true
+    },
+    {
+      "agent": "classifier",
+      "tool": "escalation.create",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "clinic.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "redflags.evaluate",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "safety_nlp.classify",
+      "permitted": false
+    },
+    {
+      "agent": "safety",
+      "tool": "redflags.evaluate",
+      "permitted": true
+    },
+    {
+      "agent": "safety",
+      "tool": "llm.complete",
+      "permitted": true
+    },
+    {
+      "agent": "safety",
+      "tool": "safety_nlp.classify",
+      "permitted": true
+    },
+    {
+      "agent": "safety",
+      "tool": "escalation.create",
+      "permitted": false
+    },
+    {
+      "agent": "safety",
+      "tool": "clinic.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "safety",
+      "tool": "ml.predict",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "clinic.lookup",
+      "permitted": true
+    },
+    {
+      "agent": "routing",
+      "tool": "facility.hours.lookup",
+      "permitted": true
+    },
+    {
+      "agent": "routing",
+      "tool": "travel.estimate",
+      "permitted": true
+    },
+    {
+      "agent": "routing",
+      "tool": "llm.complete",
+      "permitted": true
+    },
+    {
+      "agent": "routing",
+      "tool": "escalation.create",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "redflags.evaluate",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "ml.predict",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "safety_nlp.classify",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "escalation.create",
+      "permitted": true
+    },
+    {
+      "agent": "hitl",
+      "tool": "llm.complete",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "clinic.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "redflags.evaluate",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "ml.predict",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "safety_nlp.classify",
+      "permitted": false
+    },
+    {
+      "agent": "reflection",
+      "tool": "critique",
+      "permitted": true
+    },
+    {
+      "agent": "reflection",
+      "tool": "llm.complete",
+      "permitted": true
+    },
+    {
+      "agent": "reflection",
+      "tool": "escalation.create",
+      "permitted": false
+    },
+    {
+      "agent": "reflection",
+      "tool": "ml.predict",
+      "permitted": false
+    },
+    {
+      "agent": "reflection",
+      "tool": "safety_nlp.classify",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "route",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "route",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "route",
+      "permitted": true
+    },
+    {
+      "agent": "reflection",
+      "tool": "route",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "route",
+      "permitted": false
+    },
+    {
+      "agent": "safety",
+      "tool": "route",
+      "permitted": false
+    },
+    {
+      "agent": "classifier",
+      "tool": "aggregate",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "aggregate",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "aggregate",
+      "permitted": true
+    },
+    {
+      "agent": "reflection",
+      "tool": "aggregate",
+      "permitted": false
+    },
+    {
+      "agent": "routing",
+      "tool": "aggregate",
+      "permitted": false
+    },
+    {
+      "agent": "safety",
+      "tool": "aggregate",
+      "permitted": false
+    },
+    {
+      "agent": "reflection",
+      "tool": "rag.retrieve",
+      "permitted": true
+    },
+    {
+      "agent": "reflection",
+      "tool": "redflags.lookup",
+      "permitted": true
+    },
+    {
+      "agent": "routing",
+      "tool": "redflags.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "hitl",
+      "tool": "redflags.lookup",
+      "permitted": false
+    },
+    {
+      "agent": "intake",
+      "tool": "redflags.lookup",
+      "permitted": false
+    }
+  ]
+}

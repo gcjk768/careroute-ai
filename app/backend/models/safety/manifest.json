@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "activationMode": "shadow",
+  "runtimeDownloadsAllowed": false,
+  "description": "Safety NLP release manifest. Records which optional models the Safety-Override shadow pipeline may load, and under what approvals. Checked in deliberately: it is a governance record, not a build artifact. The ner/assertion/similarity entries are downloaded at `docker build` time by app/safety_nlp/prefetch.py at the pinned revision and checked against artifactSha256 (sha256 of model.safetensors); the runtime loads them local-files-only.",
+  "ner": {
+    "biomedical": {
+      "model": "d4data/biomedical-ner-all",
+      "revision": "015a4050c9ac99722e61c547aa9b4282bcbedc7f",
+      "license": "Apache-2.0",
+      "usage": "shadow_only",
+      "artifact_path": "models/safety/biomedical-ner-all",
+      "artifactSha256": "d744b846a71ce6ccdb49d7bfe5097eadc41e766ffd28481e1636ed796e820165"
+    }
+  },
+  "assertion": {
+    "clinical": {
+      "model": "bvanaken/clinical-assertion-negation-bert",
+      "revision": "330ccbe440c128616cc121fe4b3fe373379424ab",
+      "license": "unknown",
+      "usage": "shadow_only",
+      "artifact_path": "models/safety/clinical-assertion-negation-bert",
+      "artifactSha256": "76a6b1d5ac3e74e9cecf1c82789ad320b965209345c3e9bc98c2c8a5685e9f1b",
+      "notes": "The model card declares no license. Shadow telemetry only; confirm terms before any activation beyond shadow."
+    }
+  },
+  "similarity": {
+    "biolord": {
+      "model": "FremyCompany/BioLORD-2023",
+      "revision": "167aab527b238a50ca65224e6319215d2ff4fc9f",
+      "license": "other",
+      "usage": "shadow_only_synthetic_examples_not_clinically_reviewed",
+      "artifact_path": "models/safety/biolord-2023",
+      "artifactSha256": "f8c969586cc6b0fd393faa7d879de93d6cc532123956041fefd3474194322050",
+      "notes": "License review pending (UMLS/SNOMED-derived training data); see similarity.BIOLORD_LICENSE_REVIEW_STATUS."
+    },
+    "mdebertaNli": {
+      "model": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+      "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+      "license": "MIT",
+      "usage": "shadow_only",
+      "artifact_path": "models/safety/mdeberta-v3-base-mnli-xnli",
+      "artifactSha256": "65af59b1ff4450b09ecbf13ca35c840dbf038b26ff8e10e5ea89ca724828ed1e",
+      "notes": "Direct multilingual NLI comparator for the category stage (CAREROUTE_SAFETY_NLP_DIRECT_NLI). Fetched only with the WITH_SAFETY_NLP_DIRECT_NLI=1 build arg; ~558 MB fp16 safetensors."
+    }
+  },
+  "translation": {
+    "nllb": {
+      "enabled": false,
+      "model": "facebook/nllb-200-distilled-600M",
+      "license": "CC-BY-NC-4.0",
+      "usage": "research_shadow_only",
+      "productionActivationApproved": false,
+      "approvals": {
+        "license": false,
+        "governance": false,
+        "clinical": false
+      },
+      "notes": "CC-BY-NC-4.0 is non-commercial/research-only for this project. Production or additive activation requires explicit license AND governance approval; validate_safety_model_manifest() enforces this."
+    }
+  }
+}

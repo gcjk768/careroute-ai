@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Horusec reads ./horusec-config.json from the working directory (CI runs it from the repo root).",
+    "horusecCliFilesOrPathsToIgnore: the first two entries are Horusec's own defaults (setting this key replaces them).",
+    "The rest are INDIVIDUAL test files whose purpose is to exercise credential handling, so they hold fake",
+    "fixture keys/passwords by design (HS-LEAKS-25/26 false positives). They stay covered by the real secret",
+    "gates (gitleaks, TruffleHog, GitLab secret_detection). Do not widen this to whole directories.",
+    "horusecCliFalsePositiveHashes: per-finding FPs in non-test files (see _falsePositiveNotes). Horusec's hash",
+    "includes the line number, so if a listed line moves the finding re-appears: re-triage it and replace",
+    "the hash with the new vulnHash from `horusec start -o json`."
+  ],
+  "horusecCliFilesOrPathsToIgnore": [
+    "*tmp*",
+    "**/.vscode/**",
+    "**/backend/tests/services/test_onemap.py",
+    "**/backend/tests/test_credentials_guard.py",
+    "**/backend/tests/test_eval_retrieval.py",
+    "**/backend/tests/test_llm_openai.py",
+    "**/backend/tests/test_llm_privacy.py",
+    "**/backend/tests/test_rag_injection.py",
+    "**/backend/tests/test_rag_onyx.py",
+    "**/backend/tests/test_report.py",
+    "**/backend/tests/test_staff_auth.py",
+    "**/frontend/tests/staffSession.test.mjs"
+  ],
+  "horusecCliFalsePositiveHashes": [
+    "4b3ef4fa898602cf0f00cf6c6f3034591fdd66ee77fb6d0a2954c98a7c344a6f",
+    "258b7a6826028c04b369c2a160225bcd152f9fefe4e5bcdabd698a99d502f429",
+    "eb29af435c27ec309477f57324d66221272eb8c8c2ac4fb18e89ac76c520ff70",
+    "d90bb7fb9b0706b9971ad0b1898db95b6a09257a4d5558f54245edef192c4fd4",
+    "cdf47156ea95764d4c9789ff78302633d25fc0a239a83363672811816b7b0398"
+  ],
+  "_falsePositiveNotes": {
+    "4b3ef4fa898602cf0f00cf6c6f3034591fdd66ee77fb6d0a2954c98a7c344a6f": "backend/app/config.py HS-LEAKS-25: STAFF_API_KEY is read from the CAREROUTE_STAFF_API_KEY env var (default empty); no literal secret",
+    "258b7a6826028c04b369c2a160225bcd152f9fefe4e5bcdabd698a99d502f429": "backend/app/config.py HS-LEAKS-25: OPENAI_API_KEY is read from the env var (default empty); no literal secret",
+    "eb29af435c27ec309477f57324d66221272eb8c8c2ac4fb18e89ac76c520ff70": "backend/app/main.py HS-LEAKS-25: health field reports the auth MODE label ('api-key'/'open'), not a key",
+    "d90bb7fb9b0706b9971ad0b1898db95b6a09257a4d5558f54245edef192c4fd4": "docs/vault/Open Work 2026-09-01.md HS-LEAKS-26: doc prose quoting a test fixture",
+    "cdf47156ea95764d4c9789ff78302633d25fc0a239a83363672811816b7b0398": "frontend/lib/staffSession.js HS-LEAKS-26: constant-time compare of the submitted password against the env value; no literal secret"
+  }
+}

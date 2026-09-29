@@ -1,0 +1,14 @@
+# [MLOps] Grafana datasource provisioning — auto-wires Prometheus so the
+# dashboard works on first boot with no manual setup.
+#
+# Mirrors careroute_ai_app/monitoring/grafana/provisioning/datasources/prometheus.yml;
+# the URL is the Cloud Map DNS name instead of the compose service name.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: ${prometheus_url}
+    isDefault: true
+    editable: true

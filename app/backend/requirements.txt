@@ -1,0 +1,33 @@
+fastapi==0.141.1
+# Pinned explicitly: FastAPI 0.115.x capped starlette at <0.42 (PYSEC-2026-161/1941/1942/2280/2281/248/249).
+starlette==1.7.0
+uvicorn[standard]==0.32.1
+httpx==0.28.1
+pydantic==2.13.5
+# Clinic-routing data sources and distance calculation.
+requests==2.33.1
+beautifulsoup4==4.12.3
+cachetools==5.5.0
+geopy==2.4.1
+python-dotenv==1.2.2
+# Real ML severity model + SHAP explanations + fairness/drift audit (app/ml)
+# Python 3.13-compatible wheel releases.  Keeping NumPy 1.x here makes pip
+# attempt a local C build on Python 3.13/Windows.
+numpy==2.2.6
+scikit-learn==1.6.1
+shap==0.50.0
+# [MLOps] Operational + inference telemetry exposed at /metrics (optional-safe:
+# the app degrades to no-op metrics if this is absent — see app/metrics.py).
+prometheus-client==0.21.1
+# [Microservices] durable escalation queue + audit trail (app/persistence.py)
+redis==5.2.1
+# Transitive floors pinned so resolver-based SCA (osv-scanner) cannot pick a
+# vulnerable version: anyio GHSA-5p39-cfhj-2xmp/GHSA-82r6-8w77-94w6 (<4.14.2),
+# idna PYSEC-2026-215 (<3.15), scipy PYSEC-2023-102/114 (<1.10). anyio!=4.15.0 (mlflow).
+anyio==4.15.1
+idna==3.20
+scipy==1.18.1
+# Optional per-case LLM tracing (app/tracing.py). Imported only when LANGFUSE_* /
+# LANGSMITH_API_KEY are set; installed in every image so the gateways can trace.
+langfuse==4.15.6
+langsmith==0.14.1

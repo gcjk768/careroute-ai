@@ -1,0 +1,40 @@
+flowchart TB
+  PUB["Member of the public<br/>(patient / caregiver)"]
+  CLIN["Triage clinician"]
+  GOV["Governance officer"]
+  GL["GitLab CI/CD · MLflow · DVC"]
+  AWS["AWS ap-southeast-1<br/>ECS Fargate · ALB · ECR · Secrets Manager · S3 artifacts"]
+  REF["CHAS clinic directory<br/>GoWhere hours snapshot<br/>guidance corpus (32 documents)"]
+
+  subgraph SYS["CareRoute AI - system boundary"]
+    WEB["Next.js web app<br/>patient page · staff portal"]
+    API["FastAPI backend<br/>7 agents · RF model · guardrails · audit<br/>one process on AWS · one container per agent in compose"]
+    MON["Prometheus · Alertmanager · Grafana"]
+  end
+
+  LLM["LLM provider<br/>OpenAI API (gpt-4o-mini) — the only provider"]
+  MAP["OneMap API (SLA)"]
+  ONYX["Onyx CE (self-hosted RAG)"]
+
+  PUB -- "symptoms, demographics, location<br/>→ acuity, destination, explanation" --> WEB
+  CLIN -- "review escalations,<br/>record final acuity" --> WEB
+  GOV -- "fairness and drift audit,<br/>Model Card sign-off" --> WEB
+  GL -- "gated model artifact · images pushed<br/>to ECR by release tag (OIDC role)" --> API
+  AWS -- "hosts the demo stack<br/>(applied 22 Sep 2026)" --> SYS
+  REF -- "read-only reference data" --> API
+  WEB <--> API
+  API --> MON
+  API -. "optional: JSON reasoning" .-> LLM
+  API -. "optional: travel time, route" .-> MAP
+  API -. "optional: retrieval" .-> ONYX
+
+  style SYS fill:#ffffcc,stroke:#9673a6
+  style PUB fill:#dae8fc,stroke:#6c8ebf
+  style CLIN fill:#dae8fc,stroke:#6c8ebf
+  style GOV fill:#dae8fc,stroke:#6c8ebf
+  style GL fill:#f5f5f5,stroke:#666666
+  style AWS fill:#f5f5f5,stroke:#666666
+  style REF fill:#f5f5f5,stroke:#666666
+  style LLM fill:#f5f5f5,stroke:#666666
+  style MAP fill:#f5f5f5,stroke:#666666
+  style ONYX fill:#f5f5f5,stroke:#666666

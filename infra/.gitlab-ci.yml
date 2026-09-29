@@ -1,0 +1,454 @@
+###############################################################################
+# CareRoute AI — Infrastructure pipeline (Terraform + Terragrunt -> AWS)
+# -----------------------------------------------------------------------------
+# A deliberately COMPREHENSIVE IaC pipeline — a client-facing reference for
+# "the right way" to ship Terraform — while keeping real AWS spend near zero.
+# Every gate below runs in a cheap throwaway CI container and provisions
+# NOTHING; the only job that creates billable AWS resources is the MANUAL
+# `apply`, and a scheduled auto-destroy guarantees nothing is left running.
+#
+#   validate ─▶ scan ─▶ plan ─▶ review ─▶ deploy ─▶ verify ─▶ cleanup
+#   fmt         checkov  (+JSON  OPA policy manual    smoke     manual +
+#   validate    gitleaks plan)              apply     test      scheduled
+#   tflint      IaC-sec                                         auto-destroy
+#   config_drift
+#
+# Apply/destroy are MANUAL so nothing bills by accident. The security / cost /
+# policy gates are SOFT (report, don't block) so the demo's *intentional* cost
+# trade-offs (public subnets, no NAT gateway) surface for review instead of
+# failing the pipeline — except `gitleaks`, the one HARD gate: a committed
+# secret must never merge.
+#
+# ── Required CI/CD variables (Settings ▸ CI/CD ▸ Variables) ──────────────────
+#   AWS_DEFAULT_REGION            e.g. ap-southeast-1
+#   AWS_ACCESS_KEY_ID    (masked)
+#   AWS_SECRET_ACCESS_KEY (masked, protected)
+#   TF_VAR_openai_api_key (masked, protected)  ← OpenAI (ChatGPT) API key; Terragrunt
+#                                                 maps TF_VAR_* onto the stack input
+#                                                 openai_api_key -> Secrets Manager.
+#                                                 (Holds an Anthropic key instead when
+#                                                 openai_base_url is pointed at
+#                                                 Anthropic's OpenAI-compat endpoint.)
+#   TF_VAR_staff_password (masked, protected)  ← staff-portal password (Secrets
+#                                                 Manager -> frontend). Unset = a
+#                                                 random one: portal locked.
+#   TF_VAR_onemap_email     (masked, OPTIONAL)  ← OneMap account (onemap.gov.sg).
+#   TF_VAR_onemap_password  (masked, OPTIONAL)     Both or neither: without them
+#                                                  Care Routing falls back to a
+#                                                  labelled straight-line estimate
+#                                                  instead of a real travel time.
+#   APP_REPO_URL         (OPTIONAL)             ← the app project's clone URL; lets
+#                                                 `config_drift` diff our copy of
+#                                                 monitoring/*.yml against the
+#                                                 source of truth. Self-skips
+#                                                 (green) if unset. APP_REPO_REF
+#                                                 optionally pins a branch/tag.
+#   TF_VAR_langsmith_api_key (masked, OPTIONAL) ← LangSmith tracing key; creates the
+#                                                 secret and sets LANGSMITH_API_KEY on
+#                                                 the backend + sub-agents. Unset = off.
+#   TF_VAR_onyx_api_key  (masked, OPTIONAL)     ← only if you host Onyx and set
+#                                                 onyx_base_url; otherwise the
+#                                                 backend uses its in-process
+#                                                 TF-IDF retriever.
+# Give the AWS credentials only what the modules need (VPC, ECS, ELB, ECR, IAM,
+# Secrets Manager, CloudWatch, SNS, S3+DynamoDB for state, and S3 again for the
+# optional artifacts bucket) - plus ssm:GetParameter/PutParameter on
+# /careroute/* for the release history the `rollback` job reads.
+#
+# ── Continuous delivery from the app repo ──────────────────────────────────
+# Since 2026-09-23 the APP pipeline rolls images out on ECS itself
+# (deploy:ecs / rollback:production -> its scripts/deploy_ecs.sh, over the
+# modules/ci_oidc role); this pipeline owns the infrastructure and keeps the
+# running tag on an infra-only apply. The trigger path below still works for a
+# Terraform-side deploy or rollback started by hand (trigger token) with:
+#   IMAGE_TAG=<sha>            -> plan runs; `apply` stays a MANUAL second click,
+#                                 so nothing billable is created on one click.
+#   ROLLBACK_REQUESTED=true    -> only the `rollback` job deploys, automatically
+#                                 (the app's rollback:production sends this).
+# After every apply, scripts/verify_rollout.sh waits for ECS to finish and
+# FAILS the job if ECS rolled the release back (circuit breaker or the 5xx-rate
+# alarms in careroute_stack/deploy_safety.tf). Only a verified tag is recorded
+# as the new `current` release in SSM (scripts/release_history.sh).
+#
+# NOTE: `plan` is also a CORRECTNESS gate, not just a preview. The stack carries
+# plan-time preconditions (modules/careroute_stack: terraform_data.guards) that
+# FAIL the plan for combinations which would apply cleanly and then misbehave —
+# more than one backend task (clinical state is in process memory), API Gateway
+# in front of the SSE triage stream, or the metrics sidecar without the memory
+# to run it. So a red `plan` here may be the guard doing its job; read the
+# error, it names the escape hatch.
+#
+# ── Optional: create a SCHEDULED pipeline (CI/CD ▸ Schedules, e.g. nightly) so
+#    the `scheduled_destroy` safety net tears down a forgotten demo before it
+#    can bill overnight.
+###############################################################################
+
+# Terraform + Terragrunt + AWS CLI preinstalled (verified tag; the "aws-"
+# variant bundles the AWS CLI the before_script needs).
+image:
+  name: devopsinfra/docker-terragrunt:aws-tf-1.9.8-tg-0.69.0
+  entrypoint: [""]
+
+stages:
+  - validate
+  - scan
+  - plan
+  - review
+  - deploy
+  - verify
+  - cleanup
+
+variables:
+  TF_INPUT: "0"
+  TF_IN_AUTOMATION: "true"
+  # Which live/<env>/ unit the pipeline acts on. Override it when running a
+  # pipeline manually to target `staging` instead: live/staging is the
+  # promotion target the CD decks ask for (CD p8, Agentic p15), and it is a
+  # variable rather than a second pipeline so the SAME gates run against both.
+  TG_ENV: "demo"
+  # IMAGE_TAG is deliberately NOT defaulted here. It used to be
+  # ${CI_COMMIT_SHORT_SHA} - the INFRA repo's commit, which names no image, so
+  # every pipeline started by an infra change planned a deploy of a tag that
+  # does not exist. It now arrives from the app pipeline's trigger, and when it
+  # is absent `plan` reuses the tag the backend is running (see the plan job).
+
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .terragrunt-cache/
+
+# Default before_script targets the Terraform image + AWS. Jobs that use a
+# different image (the scanners / cost / policy tools) override this with `[]`
+# because they need neither AWS credentials nor the terragrunt binary.
+before_script:
+  # Accept the LangSmith key under either name (a group-level LANGSMITH_API_KEY
+  # works without a TF_VAR_ duplicate); Terraform only reads TF_VAR_*.
+  - export TF_VAR_langsmith_api_key="${TF_VAR_langsmith_api_key:-${LANGSMITH_API_KEY:-}}"
+  - cd "live/${TG_ENV}"
+  - terragrunt --version
+  - aws sts get-caller-identity # fail fast if AWS creds are wrong
+
+# ─────────────────────────────── validate ──────────────────────────────────
+validate:
+  stage: validate
+  script:
+    - cd "${CI_PROJECT_DIR}"
+    - terraform fmt -check -recursive -diff
+    - cd "live/${TG_ENV}"
+    - terragrunt init --terragrunt-non-interactive
+    - terragrunt validate
+
+# tflint — provider-aware linting (deprecated args, invalid instance types,
+# missing required attributes) that `terraform validate` does not catch.
+tflint:
+  stage: validate
+  needs: []
+  image:
+    name: ghcr.io/terraform-linters/tflint:latest
+    entrypoint: [""]
+  before_script: []
+  script:
+    - cd "${CI_PROJECT_DIR}"
+    - tflint --version
+    - tflint --init      # installs the AWS ruleset pinned in .tflint.hcl
+    - tflint --recursive
+  allow_failure: true
+
+# config_drift — modules/monitoring_stack/config/ is a hand-kept COPY of the app
+# repo's monitoring/*.yml (a cross-repo file reference would break this repo's
+# CI, which checks out only this repo). Nothing detected divergence, and on
+# 2026-09-17 our alert.rules.yml turned out to be 74 lines behind: the whole
+# `careroute-llm` group — LLM cost, token-quota, p95 latency and provider-failure
+# alerts — was missing. Prometheus loads a file with a group missing WITHOUT
+# complaining, so the deployed stack claimed alerting it did not have. Silent is
+# the entire problem, which is why this is a HARD gate rather than a report.
+#
+# Clones the app repo with this job's CI_JOB_TOKEN unless APP_REPO_URL overrides
+# it, so the check always runs (it used to skip green when the variable was unset).
+#
+#   APP_REPO_URL  e.g. https://gitlab.com/<group>/careroute_ai/careroute_ai_app.git
+#                 For a private repo in the same group use the job token:
+#                 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/<group>/...
+#   APP_REPO_REF  optional; defaults to the default branch. Pin it to a tag or
+#                 SHA if you want the copy frozen against a known app release
+#                 rather than tracking whatever landed on main this morning.
+config_drift:
+  stage: validate
+  needs: []
+  image: alpine:3.20
+  before_script: []
+  script:
+    - apk add --no-cache git >/dev/null
+    # Defaults to the app repo over this job's CI_JOB_TOKEN (it used to exit 0,
+    # "skipping", whenever APP_REPO_URL was unset, so the check never ran). If the
+    # clone is refused, add this project to the app project's CI/CD job-token
+    # allowlist; the job fails loudly rather than skipping.
+    - git clone --depth 1 ${APP_REPO_REF:+--branch "$APP_REPO_REF"} "${APP_REPO_URL:-https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/teamproject4040840/nus-iss3/careroute_ai/careroute_ai_app.git}" /tmp/app
+    - echo "app repo at $(git -C /tmp/app rev-parse --short HEAD) ($(git -C /tmp/app log -1 --format=%cs))"
+    # Only the VERBATIM copies. prometheus.yml and the Grafana datasource are
+    # templated here (Cloud Map DNS instead of compose hostnames), so they are
+    # expected to differ and diffing them would only train people to ignore
+    # this job.
+    - |
+      rc=0
+      diff -u /tmp/app/monitoring/alert.rules.yml  modules/monitoring_stack/config/alert.rules.yml  || rc=1
+      diff -u /tmp/app/monitoring/alertmanager.yml modules/monitoring_stack/config/alertmanager.yml || rc=1
+      diff -u /tmp/app/monitoring/grafana/dashboards/careroute-triage.json \
+              modules/monitoring_stack/config/careroute-triage.json                                 || rc=1
+      if [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "─────────────────────────────────────────────────────────────────"
+        echo "Monitoring config has DRIFTED from the app repo."
+        echo "The deployed Prometheus would evaluate the rules shown on the"
+        echo "RIGHT (+) while the team edits the ones on the LEFT (-)."
+        echo "Fix: copy the app repo's files over modules/monitoring_stack/config/."
+        echo "─────────────────────────────────────────────────────────────────"
+        exit 1
+      fi
+      echo "monitoring config is in step with the app repo"
+
+# ──────────────────────────────── scan ─────────────────────────────────────
+# Static security scanning of the IaC itself. These run immediately (needs: []),
+# need no AWS credentials, and provision nothing — $0 and parallel.
+
+# Checkov — Terraform misconfiguration scanning (open SGs, unencrypted stores,
+# missing IMDSv2, public exposure, ...). SOFT-fail: the demo's deliberate cost
+# trade-offs are surfaced in the job log + the MR "Security" tab, not blocked.
+checkov:
+  stage: scan
+  needs: []
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint: [""]
+  before_script: []
+  script:
+    - cd "${CI_PROJECT_DIR}"
+    # cli → job log; gitlab_sast → gl-sast.json (the 2nd --output-file-path value
+    # is a FILE, verified with checkov 3.3.x — a bare dir name does NOT work).
+    # --config-file pulls in the CURATED baseline: every skip in .checkov.yaml
+    # carries a written reason, so what is left in this report is either a real
+    # finding or a gap we have chosen to keep visible (TLS, mutable tags, WAF).
+    # Without it the job reported ~53 undifferentiated findings, which is a
+    # scroll rather than a security review.
+    - checkov -d . --config-file .checkov.yaml --compact -o cli -o gitlab_sast --output-file-path console,gl-sast.json
+  artifacts:
+    when: always
+    reports:
+      sast: gl-sast.json
+    paths:
+      - gl-sast.json
+    expire_in: 1 week
+  allow_failure: true
+
+# Gitleaks — secret scanning across the git history. This is the ONE HARD gate:
+# a committed AWS key or API token must fail the pipeline. (The README's example
+# `sk-...` placeholders are too short to match the OpenAI rule, so they don't
+# false-positive.) If a false positive ever blocks the demo, add a
+# `.gitleaks.toml` allowlist rather than disabling the gate.
+gitleaks:
+  stage: scan
+  needs: []
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  before_script: []
+  script:
+    - cd "${CI_PROJECT_DIR}"
+    - gitleaks detect --source . --redact -v
+
+# ──────────────────────────────── plan ─────────────────────────────────────
+plan:
+  stage: plan
+  needs: ["validate"]
+  script:
+    - terragrunt init --terragrunt-non-interactive
+    # Which image this plan deploys: the app's trigger says so, otherwise keep
+    # the one already running, so an infra-only change never swaps the app
+    # build (scripts/running_image_tag.sh explains the failure it prevents).
+    # Nothing running yet -> unset, and live/<env> applies its own fallback.
+    - |
+      if [ -z "${IMAGE_TAG:-}" ]; then
+        IMAGE_TAG="$(sh "${CI_PROJECT_DIR}/scripts/running_image_tag.sh")"
+        [ -n "$IMAGE_TAG" ] && echo "IMAGE_TAG not given - keeping the running tag: $IMAGE_TAG"
+      fi
+      if [ -n "${IMAGE_TAG:-}" ]; then export IMAGE_TAG; else unset IMAGE_TAG; fi
+      echo "DEPLOY_IMAGE_TAG=${IMAGE_TAG:-latest}" > deploy.env
+    # ABSOLUTE path, on purpose. Terragrunt runs terraform inside a hashed
+    # .terragrunt-cache/<x>/<y>/ copy of the module, so a relative `-out=tfplan`
+    # landed there — somewhere neither the job cache (keyed on the repo-root
+    # .terragrunt-cache/) nor an artifact picked up, and `apply` in the next job
+    # had no plan to apply. Writing it next to terragrunt.hcl lets it travel as
+    # an artifact, so apply runs EXACTLY the plan the review gates read.
+    - terragrunt plan --terragrunt-non-interactive -out="${CI_PROJECT_DIR}/live/${TG_ENV}/tfplan"
+    - terragrunt show -no-color "${CI_PROJECT_DIR}/live/${TG_ENV}/tfplan" > plan.txt
+    - terragrunt show -json "${CI_PROJECT_DIR}/live/${TG_ENV}/tfplan" > plan.json # machine-readable → cost + policy gates
+  artifacts:
+    name: "plan-${TG_ENV}-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - live/${TG_ENV}/plan.txt
+      - live/${TG_ENV}/plan.json
+      # The binary plan `apply` consumes. It holds planned values INCLUDING
+      # secrets (the LLM key, generated passwords), as plan.json already did,
+      # so the artifacts are restricted to Developer+ and expire fast.
+      - live/${TG_ENV}/tfplan
+    reports:
+      dotenv: live/${TG_ENV}/deploy.env # DEPLOY_IMAGE_TAG -> apply's verify step
+    access: developer
+    expire_in: 1 day
+
+# ─────────────────────────────── review ────────────────────────────────────
+# Policy gates that read the machine-readable plan (needs: plan). No AWS
+# access, provisions nothing — pure analysis of what `apply` WOULD do.
+
+# OPA / Conftest — policy-as-code over the plan (e.g. surface public 0.0.0.0/0
+# ingress; deny unencrypted databases). Warn-level rules report without blocking
+# the demo; see policy/terraform.rego to promote a rule to a hard `deny`.
+opa_policy:
+  stage: review
+  needs: ["plan"]
+  image:
+    name: openpolicyagent/conftest:latest
+    entrypoint: [""]
+  before_script: []
+  script:
+    - cd "${CI_PROJECT_DIR}"
+    - conftest test "live/${TG_ENV}/plan.json" --policy policy --all-namespaces
+  allow_failure: true
+
+# ─────────────────────────────── deploy ────────────────────────────────────
+# MANUAL apply. Applies the exact reviewed plan. Gated on `gitleaks` so a secret
+# leak blocks deployment (checkov/opa are informational, so not gates).
+#
+# A rollback pipeline (ROLLBACK_REQUESTED) never applies here - the `rollback`
+# job does.
+#
+# apply returning is not the release succeeding: ECS rolls out afterwards and
+# may roll back. verify_rollout.sh waits for that and fails this job on a
+# revert; only then is the tag recorded as the current release.
+apply:
+  stage: deploy
+  needs: ["plan", "gitleaks"]
+  resource_group: ${TG_ENV} # one apply/rollback per environment at a time
+  rules:
+    - if: '$ROLLBACK_REQUESTED == "true"'
+      when: never
+    - when: manual
+      allow_failure: true # keeps an un-applied pipeline green, as before
+  script:
+    - terragrunt init --terragrunt-non-interactive
+    # The plan artifact from `plan` (see the note there). A plan older than the
+    # state it was made against is refused by terraform ("Saved plan is stale"):
+    # re-run `plan`, then `apply`.
+    - terragrunt apply --terragrunt-non-interactive "${CI_PROJECT_DIR}/live/${TG_ENV}/tfplan"
+    - echo "── App URL ──" && terragrunt output -raw app_url
+    - sh "${CI_PROJECT_DIR}/scripts/verify_rollout.sh" backend "${DEPLOY_IMAGE_TAG}"
+    - sh "${CI_PROJECT_DIR}/scripts/verify_rollout.sh" frontend "${DEPLOY_IMAGE_TAG}"
+    - sh "${CI_PROJECT_DIR}/scripts/release_history.sh" record "${DEPLOY_IMAGE_TAG}"
+  environment:
+    name: ${TG_ENV}
+    on_stop: destroy
+
+# MANUAL ROLLBACK to the previous verified release. Automatic rollback needs no
+# job: ECS reverts on its own while a rollout or its bake period is open. This
+# is for a release that passed that window and was found bad later.
+#
+# Target: ROLLBACK_IMAGE_TAG if given, else the `previous` tag in SSM. It is a
+# full `terragrunt apply` with that tag - Terraform stays the one writer of the
+# task definition, so the next plan does not see drift and "undo" the rollback.
+# Note it applies main's CURRENT infrastructure with the OLD image: it rolls
+# back the app, not an infra change (revert those in git).
+#
+# Runs by itself when the app's rollback:production job triggers a pipeline
+# with ROLLBACK_REQUESTED=true (one click there is the approval: a rollback
+# only re-applies a release that already ran); otherwise click it here. `needs: []` so it does
+# not wait for the scan/plan stages. Do NOT use the Environments page's
+# "Rollback" button: it re-runs an old `apply`, whose saved plan is stale.
+rollback:
+  stage: deploy
+  needs: []
+  resource_group: ${TG_ENV}
+  rules:
+    - if: '$ROLLBACK_REQUESTED == "true"'
+      when: on_success
+    - when: manual
+      allow_failure: true
+  script:
+    - |
+      TARGET="${ROLLBACK_IMAGE_TAG:-$(sh "${CI_PROJECT_DIR}/scripts/release_history.sh" get previous)}"
+      CURRENT="$(sh "${CI_PROJECT_DIR}/scripts/running_image_tag.sh")"
+      if [ -z "$TARGET" ]; then
+        echo "No rollback target: no ROLLBACK_IMAGE_TAG and no previous release recorded for ${TG_ENV}." >&2
+        exit 1
+      fi
+      echo "Rolling ${TG_ENV} back: ${CURRENT:-<nothing running>} -> ${TARGET}"
+      # The image must still exist: ECR's lifecycle policy expires old tags.
+      for repo in backend frontend; do
+        aws ecr describe-images --repository-name "careroute-${TG_ENV}/${repo}"           --image-ids imageTag="$TARGET" >/dev/null           || { echo "careroute-${TG_ENV}/${repo}:${TARGET} is gone from ECR - cannot roll back to it" >&2; exit 1; }
+      done
+      export IMAGE_TAG="$TARGET"
+    - terragrunt init --terragrunt-non-interactive
+    - terragrunt apply --terragrunt-non-interactive -auto-approve
+    - sh "${CI_PROJECT_DIR}/scripts/verify_rollout.sh" backend "${IMAGE_TAG}"
+    - sh "${CI_PROJECT_DIR}/scripts/verify_rollout.sh" frontend "${IMAGE_TAG}"
+    - sh "${CI_PROJECT_DIR}/scripts/release_history.sh" record "${IMAGE_TAG}"
+  environment:
+    name: ${TG_ENV}
+
+# ─────────────────────────────── verify ────────────────────────────────────
+# Post-deploy smoke test — proves the DEPLOYED stack is reachable and serving,
+# not just that Terraform reported success. This is an INFRA reachability check;
+# deep model/behaviour/security testing lives in the app repo's own pipeline
+# (train → model-gate → evidently → ai-security → dast). Kept deliberately thin.
+#   1) frontend root responds (Next.js task is up behind the ALB)
+#   2) backend /api/health returns 2xx/3xx and reports the active LLM provider
+#   3) /api/fairness serves — proves the trained severity model loaded & audits
+# MANUAL so it only runs against a live env you chose to stand up; retryable
+# while the ECS Fargate tasks finish registering as healthy with the ALB.
+smoke_test:
+  stage: verify
+  # optional: a rollback pipeline (ROLLBACK_REQUESTED) has no `apply` job, and a
+  # hard need on a job that is not in the pipeline fails pipeline creation.
+  needs: [{ job: apply, optional: true }]
+  script:
+    - APP_URL="$(terragrunt output -raw app_url)"
+    - echo "Smoke-testing ${APP_URL}"
+    # 1) frontend root must respond (tasks may still be registering → retry)
+    - curl -fsS --retry 10 --retry-delay 15 --retry-all-errors -o /dev/null "${APP_URL}/"
+    # 2) backend health (ALB target-group health path); echo the active provider
+    - |
+      HEALTH="$(curl -fsS --retry 10 --retry-delay 15 --retry-all-errors "${APP_URL}/api/health")"
+      echo "Health: ${HEALTH}"
+    # 3) trained severity model must serve its fairness audit (non-empty JSON)
+    - |
+      FAIRNESS="$(curl -fsS --retry 5 --retry-delay 15 --retry-all-errors "${APP_URL}/api/fairness")"
+      echo "Fairness: ${FAIRNESS}"
+      test -n "${FAIRNESS}" || { echo "Empty /api/fairness response"; exit 1; }
+  when: manual
+  allow_failure: true
+
+# ─────────────────────────────── cleanup ───────────────────────────────────
+# MANUAL destroy — run this as soon as the demo is over to stop all charges.
+destroy:
+  stage: cleanup
+  # optional: a rollback pipeline (ROLLBACK_REQUESTED) has no `apply` job, and a
+  # hard need on a job that is not in the pipeline fails pipeline creation.
+  needs: [{ job: apply, optional: true }]
+  script:
+    - terragrunt init --terragrunt-non-interactive
+    - terragrunt destroy --terragrunt-non-interactive -auto-approve
+  when: manual
+  environment:
+    name: ${TG_ENV}
+    action: stop
+
+# Scheduled auto-destroy — the cost safety net. Runs ONLY on a scheduled
+# pipeline (CI/CD ▸ Schedules), tearing the stack down unconditionally so a
+# forgotten demo cannot bill overnight. Harmless (no-op) if nothing is deployed.
+scheduled_destroy:
+  stage: cleanup
+  needs: [] # DAG job → runs immediately; not blocked by the manual `apply` gate
+  script:
+    - terragrunt init --terragrunt-non-interactive
+    - terragrunt destroy --terragrunt-non-interactive -auto-approve
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'

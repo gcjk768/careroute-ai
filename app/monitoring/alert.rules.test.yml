@@ -1,0 +1,89 @@
+# promtool unit tests for the availability rules in alert.rules.yml.
+#
+#   docker run --rm -v "$PWD/monitoring:/m" --entrypoint promtool prom/prometheus:v2.55.1 test rules /m/alert.rules.test.yml
+#
+# These pin BEHAVIOUR, which the string checks in backend/tests/test_availability.py cannot:
+# a ratio over zero traffic is undefined, so it must be absent — not 0, which reads as an outage.
+rule_files:
+  - alert.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # An idle service has no yield, and must not page anyone about it.
+  - interval: 1m
+    input_series:
+      - series: 'careroute_triage_requests_total{service="careroute-backend",outcome="completed"}'
+        values: '0x40'
+    promql_expr_test:
+      - expr: careroute:yield:ratio5m
+        eval_time: 20m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LowTriageYield
+        exp_alerts: []
+
+  # A real yield loss (half the runs fail) still fires.
+  - interval: 1m
+    input_series:
+      - series: 'careroute_triage_requests_total{service="careroute-backend",outcome="completed"}'
+        values: '0+3x40'
+      - series: 'careroute_triage_requests_total{service="careroute-backend",outcome="error"}'
+        values: '0+3x40'
+    promql_expr_test:
+      - expr: careroute:yield:ratio5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'careroute:yield:ratio5m{service="careroute-backend"}'
+            value: 0.5
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LowTriageYield
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              aspect: mlops
+              service: careroute-backend
+            exp_annotations:
+              summary: "Triage yield below 95%"
+              description: "50% of received triage requests are being served — check for errors or shedding."
+
+  # The clarifying interview (2026-09-26): an "asked" turn is the service working — it
+  # answered with a question. Counting it as unserved made yield read 20-60% during a
+  # healthy 100-scenario AWS soak and would page LowTriageYield on normal traffic.
+  - interval: 1m
+    input_series:
+      - series: 'careroute_triage_requests_total{service="careroute-backend",outcome="completed"}'
+        values: '0+3x40'
+      - series: 'careroute_triage_requests_total{service="careroute-backend",outcome="asked"}'
+        values: '0+3x40'
+    promql_expr_test:
+      - expr: careroute:yield:ratio5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'careroute:yield:ratio5m{service="careroute-backend"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LowTriageYield
+        exp_alerts: []
+
+  # Harvest comes only from containers that serve answers. An agent container exports the
+  # histogram but never observes it; it must not appear as a 0% harvest.
+  - interval: 1m
+    input_series:
+      - series: 'careroute_answer_harvest_sum{service="careroute-backend"}'
+        values: '0+3x40'
+      - series: 'careroute_answer_harvest_count{service="careroute-backend"}'
+        values: '0+4x40'
+      - series: 'careroute_answer_harvest_sum{service="careroute-classifier-agent"}'
+        values: '0x40'
+      - series: 'careroute_answer_harvest_count{service="careroute-classifier-agent"}'
+        values: '0x40'
+    promql_expr_test:
+      - expr: careroute:harvest:mean5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'careroute:harvest:mean5m{service="careroute-backend"}'
+            value: 0.75

@@ -1,0 +1,78 @@
+# [MLOps] Alertmanager routing for CareRoute AI.
+#
+# Prometheus EVALUATES the rules in alert.rules.yml; Alertmanager is what turns a
+# firing rule into a notification. Without this file (and the `alerting:` block in
+# prometheus.yml) the alerts fire only inside Prometheus' own UI and reach nobody
+# -- which is what the stack did before: five well-written rules, no recipient.
+#
+# Course aspect: "Monitoring and Logging -- Logging and alert".
+#
+# NO REAL RECEIVER IS CONFIGURED HERE ON PURPOSE. A webhook/email/Slack target
+# carries an endpoint URL or credential, which does not belong in a committed
+# file. Both receivers below are therefore EMPTY ("null" receivers): the routing
+# tree, grouping and inhibition are all live and inspectable at :9093, and adding
+# a real destination is a one-block edit (examples are commented in place).
+#
+# Note for whoever adds one: Alertmanager does NOT expand environment variables
+# in this file. `${SLACK_URL}` would be read as a literal string and the config
+# would be rejected at startup. Supply secrets by mounting a rendered config
+# (or via `*_file` options where the integration supports them) instead.
+
+global:
+  # How long to wait before declaring an alert resolved once it stops firing.
+  resolve_timeout: 5m
+
+route:
+  # Group alerts by name and service so a flapping instance does not produce one
+  # notification per scrape.
+  group_by: ["alertname", "service"]
+  # Wait this long to batch up other alerts in the same group before sending.
+  group_wait: 30s
+  # Then at most one notification per group per this interval.
+  group_interval: 5m
+  # Re-send a still-firing alert this often, so a persistent problem is not
+  # forgotten after a single notification.
+  repeat_interval: 4h
+  receiver: default
+
+  routes:
+    # Availability and safety-relevant alerts page immediately rather than
+    # waiting out the default grouping delay. BackendMetricsDown means the
+    # triage API is not being scraped at all; GuardrailBlockSpike is an
+    # AI-security signal (LLM01) that a human should look at promptly.
+    - matchers:
+        - alertname =~ "BackendMetricsDown|GuardrailBlockSpike"
+      receiver: urgent
+      group_wait: 10s
+      repeat_interval: 1h
+
+inhibit_rules:
+  # If the backend is down, its latency and escalation alerts are consequences,
+  # not independent problems. Suppress them so the page says one useful thing.
+  # `equal: ["service"]` only works because every rule in alert.rules.yml now
+  # aggregates `by (..., service)`. The source alert (BackendMetricsDown) reads
+  # `up{job="careroute-backend"}` and inherits the target label prometheus.yml
+  # attaches (service: careroute-backend); the targets are sum()/
+  # histogram_quantile() expressions, which drop every label they do not name —
+  # so before that change no target ever carried `service` and this rule could
+  # not match anything. If you add a rule here, aggregate it `by (service)` too.
+  - source_matchers:
+      - alertname = "BackendMetricsDown"
+    target_matchers:
+      - alertname =~ "HighInferenceLatencyP95|HighAgentLatencyP95|EscalationRateAnomaly"
+    equal: ["service"]
+
+receivers:
+  # Both receivers are intentionally empty, so Alertmanager starts clean and
+  # routes/groups/inhibits alerts without delivering them anywhere. Uncomment and
+  # fill one block to start delivering.
+  - name: default
+    # webhook_configs:
+    #   - url: https://example.internal/careroute/alerts
+    #     send_resolved: true
+
+  - name: urgent
+    # slack_configs:
+    #   - api_url_file: /run/secrets/alertmanager_slack_url   # never inline the URL
+    #     channel: "#careroute-oncall"
+    #     send_resolved: true

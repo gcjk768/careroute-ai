@@ -1,0 +1,26 @@
+{
+  "_description": "Gold triage-evaluation set for the DETERMINISTIC (no-LLM) pipeline. Each vignette carries a gold acuity code and a must_escalate flag. must_escalate cases are unambiguous red-flags that the deterministic safety-override MUST catch (red-flag recall == 1.0). `severe_ok` lets a red-flag vignette match any severe-tier acuity (P1/P2), since the exact P1-vs-P2 split is a clinical judgement the safety layer may make either way.",
+  "severe_codes": ["P1_RESUSCITATION", "P2_EMERGENT"],
+  "vignettes": [
+    {"id": "rf-chest-pain",   "text": "Sudden crushing chest pain radiating to my left arm, sweating and short of breath.", "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-stroke",       "text": "My face is drooping on one side and my speech is slurred since this morning.",      "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-bleeding",     "text": "Severe bleeding from a deep cut on my leg that will not stop.",                    "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-airway",       "text": "I can't breathe and my lips are turning blue.",                                   "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-anaphylaxis",  "text": "My throat is closing up after a bee sting and my tongue is swelling.",           "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-suicidal",     "text": "I keep thinking I want to end my life.",                                          "gold_acuity": "P2_EMERGENT",      "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-seizure",      "text": "I am having a seizure, my whole body is convulsing.",                            "gold_acuity": "P2_EMERGENT",      "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-haemoptysis",  "text": "Coughing up blood with severe chest tightness.",                                 "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-haematemesis", "text": "Vomiting blood since this morning.",                                             "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "rf-confusion",    "text": "Sudden confusion and weakness on one side of the body.",                        "gold_acuity": "P1_RESUSCITATION", "must_escalate": true,  "severe_ok": true},
+    {"id": "mid-fever",       "text": "High fever and vomiting for three days, feeling very weak.",                     "gold_acuity": "P3_URGENT",        "must_escalate": false, "severe_ok": false},
+    {"id": "mid-abdo",        "text": "Persistent abdominal pain and nausea getting worse over two days.",             "gold_acuity": "P3_URGENT",        "must_escalate": false, "severe_ok": false},
+    {"id": "mild-cold",       "text": "Mild runny nose and sneezing, feels like a common cold.",                       "gold_acuity": "P5_SELF_CARE",     "must_escalate": false, "severe_ok": false},
+    {"id": "mild-headache",   "text": "Slight headache and a bit tired today.",                                        "gold_acuity": "P4_NON_URGENT",    "must_escalate": false, "severe_ok": false},
+    {"id": "mild-rash",       "text": "Itchy skin rash on my arm, no other symptoms.",                                 "gold_acuity": "P4_NON_URGENT",    "must_escalate": false, "severe_ok": false},
+    {"id": "mild-congestion", "text": "Blocked nose and mild congestion for a day.",                                   "gold_acuity": "P5_SELF_CARE",     "must_escalate": false, "severe_ok": false},
+    {"id": "mild-throat",     "text": "Scratchy sore throat, otherwise fine.",                                         "gold_acuity": "P4_NON_URGENT",    "must_escalate": false, "severe_ok": false},
+    {"id": "mild-cough",      "text": "Mild cough and a runny nose, no fever.",                                        "gold_acuity": "P5_SELF_CARE",     "must_escalate": false, "severe_ok": false},
+    {"id": "mild-sorethroat", "text": "I have a sore throat and a cough for a day, no fever.",                         "gold_acuity": "P4_NON_URGENT",    "must_escalate": false, "severe_ok": false},
+    {"id": "vague-off",       "text": "Feeling a bit off, some tiredness and a vague ache, hard to describe.",         "gold_acuity": "P3_URGENT",        "must_escalate": false, "severe_ok": false}
+  ]
+}

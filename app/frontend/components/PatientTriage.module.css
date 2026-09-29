@@ -1,0 +1,1233 @@
+/* ============================================================
+   PatientTriage — top-level layout
+   ============================================================ */
+.container {
+  margin: 0 auto;
+  max-width: 64rem;
+}
+
+/* Hero -------------------------------------------------------- */
+.hero {
+  margin-bottom: 40px;
+}
+
+.heroTitle {
+  margin-top: 8px;
+  max-width: 42rem;
+  font-family: var(--ff-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.pineSoft {
+  color: var(--pine-soft);
+}
+
+.heroLede {
+  margin-top: 16px;
+  max-width: 36rem;
+  font-size: 15px;
+  line-height: 1.625;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.mediumInk {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* Two-column grid -------------------------------------------- */
+.grid {
+  display: grid;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* ============================================================
+   Intake form
+   ============================================================ */
+.form {
+  padding: 24px;
+}
+
+@media (min-width: 1024px) {
+  .form {
+    grid-column: span 2;
+  }
+}
+
+.textarea {
+  margin-top: 8px;
+  width: 100%;
+  resize: none;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.6);
+  padding: 12px;
+  font-size: 15px;
+  line-height: 1.625;
+  outline: none;
+}
+
+.textarea::placeholder {
+  color: var(--moss);
+}
+
+.sampleRow {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sampleBtn {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  font-size: 12px;
+  color: rgba(20, 35, 28, 0.8);
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+
+.sampleBtn:hover {
+  background: var(--paper-2);
+}
+
+.detailsGrid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.select {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.6);
+  padding: 8px 12px;
+  font-size: 14px;
+  color: rgba(20, 35, 28, 0.8);
+}
+
+.controlRow {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.langSelect {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.6);
+  padding: 8px 12px;
+  font-family: var(--ff-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.voiceBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+
+.voiceOn {
+  border-color: var(--pine);
+  background: var(--pine);
+  color: var(--paper);
+}
+
+.voiceOff {
+  border-color: var(--line);
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.locationPanel {
+  margin-top: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(31, 76, 58, 0.04);
+  padding: 14px;
+}
+
+.locationText {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--moss);
+}
+
+.locationButton {
+  margin-top: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--pine);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pine);
+}
+
+.locationButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.locationStatus,
+.locationError {
+  margin-top: 8px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.locationStatus { color: var(--pine-soft); }
+.locationError { color: var(--coral); }
+
+.routingPrefs {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.submitRow {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.grow {
+  flex: 1;
+}
+
+.disclaimer {
+  margin-top: 16px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  line-height: 1.625;
+  color: var(--moss);
+}
+
+/* ============================================================
+   Live pipeline column
+   ============================================================ */
+.rightCol > * + * {
+  margin-top: 24px;
+}
+
+@media (min-width: 1024px) {
+  .rightCol {
+    grid-column: span 3;
+  }
+}
+
+.idle {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.idleRule {
+  margin: 0 auto 16px;
+  height: 1px;
+  width: 96px;
+  background: var(--line);
+}
+
+.idleTitle {
+  font-family: var(--ff-display);
+  font-size: 20px;
+  color: rgba(20, 35, 28, 0.6);
+}
+
+.idleText {
+  margin-top: 8px;
+  max-width: 20rem;
+  font-size: 14px;
+  color: var(--moss);
+}
+
+.runStack > * + * {
+  margin-top: 24px;
+}
+
+/* ============================================================
+   Recommendation
+   ============================================================ */
+.recCard {
+  overflow: hidden;
+}
+
+.acuityBand {
+  height: 6px;
+  width: 100%;
+}
+
+.recBody {
+  padding: 24px;
+}
+
+@media (min-width: 640px) {
+  .recBody {
+    padding: 32px;
+  }
+}
+
+.recHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.recTier {
+  margin-top: 4px;
+  font-family: var(--ff-display);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.caseId {
+  margin-top: 4px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+/* confidence meter ------------------------------------------- */
+.confBlock {
+  margin-top: 24px;
+}
+
+.confLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.confTrack {
+  margin-top: 8px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--paper-2);
+}
+
+.confFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+/* escalation notice ------------------------------------------ */
+.escalated {
+  margin-top: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(232, 161, 60, 0.4);
+  background: rgba(232, 161, 60, 0.1);
+  padding: 12px 16px;
+}
+
+.escalatedIcon {
+  margin-top: 2px;
+  color: var(--amber);
+}
+
+.escalatedText {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.semibold {
+  font-weight: 600;
+}
+
+/* PII note --------------------------------------------------- */
+.piiNote {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--pine-soft);
+}
+
+/* rationale -------------------------------------------------- */
+.rationaleBlock {
+  margin-top: 24px;
+}
+
+.rationaleText {
+  margin-top: 8px;
+  font-size: 15px;
+  line-height: 1.625;
+  color: rgba(20, 35, 28, 0.85);
+}
+
+/* stat grid -------------------------------------------------- */
+.statGrid {
+  margin-top: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.routeBlock {
+  margin-top: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.5);
+  padding: 14px 16px;
+}
+
+.routeSource {
+  margin-top: 5px;
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.75);
+}
+
+.routeList {
+  margin-top: 10px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(20, 35, 28, 0.8);
+}
+
+.routeList > * + * { margin-top: 4px; }
+
+.mapPreview {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2);
+}
+
+.transportRequired {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--coral);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.locationNeeded {
+  margin-top: 24px;
+  border: 1px solid rgba(80, 111, 90, 0.32);
+  border-radius: 12px;
+  background: rgba(232, 240, 231, 0.72);
+  padding: 16px;
+}
+
+.locationNeeded p {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(20, 35, 28, 0.82);
+}
+
+.emergencyTransport {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(157, 58, 41, 0.4);
+  border-radius: 12px;
+  background: rgba(255, 247, 242, 0.9);
+}
+
+.emergencyTransport p {
+  margin: 7px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.emergencyTransport > button {
+  margin-top: 12px;
+}
+
+.emergencyTransportControls {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.emergencyTransportControls label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.emergencyTransportControls button {
+  justify-self: start;
+}
+
+.emergencyTransportNote {
+  color: #6d473f;
+}
+
+.emergencyLocationPrompt {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid #9d3a29;
+  border-radius: 4px;
+  background: rgba(255, 247, 242, 0.9);
+  color: #6d473f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mapCanvas {
+  width: 100%;
+  height: 260px;
+  background: var(--paper-2);
+}
+
+.mapLegend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0;
+  color: var(--muted, #52616b);
+  font-size: 0.78rem;
+}
+
+.routeFallbackNote {
+  margin: 0.4rem 0 0;
+  color: #765116;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.routeReplanNote {
+  margin: 0.4rem 0 0;
+  color: #1e6b4f;
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* Other nearby options: the next-best verified clinics Care Routing compared.
+   Facts only — the backend states what it verified; the UI never infers. */
+.altBlock {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.altList {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.altList > * + * { margin-top: 8px; }
+
+.altItem {
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(20, 35, 28, 0.85);
+}
+
+.altName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.altTag {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #1e6b4f;
+  color: #1e6b4f;
+}
+
+.altMeta {
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.routeKey,
+.publicRouteKey,
+.startKey,
+.clinicKey {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.routeKey,
+.publicRouteKey {
+  width: 1.3rem;
+  border-top: 4px solid #1e6b4f;
+  border-radius: 3px;
+}
+
+.publicRouteKey {
+  border-top-color: #2266aa;
+  border-top-style: dashed;
+}
+
+.startKey,
+.clinicKey {
+  width: 0.68rem;
+  height: 0.68rem;
+  margin-left: 0.35rem;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #2266aa;
+  box-shadow: 0 0 0 1px #2266aa;
+}
+
+.clinicKey {
+  background: #1e6b4f;
+  box-shadow: 0 0 0 1px #1e6b4f;
+}
+
+.mapLink {
+  display: inline-flex;
+  margin: 10px 12px 12px;
+  color: var(--pine);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (min-width: 640px) {
+  .statGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* grounding evidence ----------------------------------------- */
+.citeBlock {
+  margin-top: 24px;
+}
+
+.citeList {
+  margin-top: 8px;
+}
+
+.citeList > * + * {
+  margin-top: 8px;
+}
+
+.citeHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.citeTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.citeSource {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.citeSnippet {
+  margin-top: 4px;
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+/* print row -------------------------------------------------- */
+.printRow {
+  margin-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.textSm {
+  font-size: 14px;
+}
+
+.printHint {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  color: var(--moss);
+}
+
+.simNote {
+  margin-top: 24px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  color: var(--moss);
+}
+
+/* ============================================================
+   DisclosureNotice
+   ============================================================ */
+.disclosure {
+  margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(239, 232, 216, 0.6);
+  padding: 16px 20px;
+}
+
+.disclosureIcon {
+  margin-top: 2px;
+  color: var(--pine-soft);
+}
+
+.disclosureText {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.625;
+  color: rgba(20, 35, 28, 0.75);
+}
+
+.semiInk {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.medium {
+  font-weight: 500;
+}
+
+.dismissBtn {
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--moss);
+}
+
+.dismissBtn:hover {
+  background: var(--paper);
+}
+
+/* ============================================================
+   ActionGuidance
+   ============================================================ */
+.action {
+  margin-top: 24px;
+  border-radius: 12px;
+  border: 1px solid;
+  padding: 16px 20px;
+}
+
+.borderCritical {
+  border-color: rgba(192, 57, 43, 0.4);
+}
+
+.borderUrgent {
+  border-color: rgba(232, 161, 60, 0.4);
+}
+
+.borderCalm {
+  border-color: rgba(31, 76, 58, 0.3);
+}
+
+.bgCritical {
+  background: rgba(192, 57, 43, 0.06);
+}
+
+.bgUrgent {
+  background: rgba(232, 161, 60, 0.1);
+}
+
+.bgCalm {
+  background: rgba(31, 76, 58, 0.05);
+}
+
+.actionHeadline {
+  margin-top: 4px;
+  font-family: var(--ff-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stepList {
+  margin-top: 8px;
+}
+
+.stepList > * + * {
+  margin-top: 6px;
+}
+
+.stepItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.625;
+  color: rgba(20, 35, 28, 0.85);
+}
+
+.stepDot {
+  margin-top: 6px;
+  height: 6px;
+  width: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--pine-soft);
+}
+
+/* ============================================================
+   FeedbackControl
+   ============================================================ */
+.feedback {
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.feedbackLabel {
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.feedbackThanks {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.feedbackBtns {
+  display: flex;
+  gap: 8px;
+}
+
+.feedbackBtn {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  font-size: 14px;
+}
+
+.feedbackBtn:hover {
+  background: var(--paper-2);
+}
+
+/* ============================================================
+   Stat + citation tile (shared)
+   ============================================================ */
+.tile {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.5);
+  padding: 12px 16px;
+}
+
+.statLabel {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.statValue {
+  margin-top: 4px;
+  font-family: var(--ff-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ============================================================
+   ExplanationBars
+   ============================================================ */
+.explBlock {
+  margin-top: 24px;
+}
+
+.explList {
+  margin-top: 12px;
+}
+
+.explList > * + * {
+  margin-top: 8px;
+}
+
+.explRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.explFeature {
+  width: 160px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 12px;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.explBarWrap {
+  position: relative;
+  height: 16px;
+  flex: 1;
+}
+
+.explAxis {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  width: 1px;
+  background: var(--line);
+}
+
+.explBar {
+  position: absolute;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+}
+
+.explValue {
+  width: 40px;
+  flex-shrink: 0;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+}
+
+.explFootnote {
+  margin-top: 8px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  color: var(--moss);
+}
+
+/* ============================================================
+   Triage error state (rate limit, refused input, dropped stream,
+   guardrail block) — shown instead of a recommendation.
+   ============================================================ */
+.errorCard {
+  border-color: rgba(229, 83, 59, 0.45);
+  background: rgba(229, 83, 59, 0.06);
+  padding: 20px;
+}
+
+.errorText {
+  margin-top: 8px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.errorHint {
+  margin-top: 8px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--moss);
+}
+
+/* Care-Routing's own explanation + its one logistics question. */
+.routingNote {
+  margin-top: 20px;
+  border-left: 2px solid rgba(62, 122, 94, 0.4);
+  padding-left: 12px;
+}
+
+.routingReason {
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(20, 35, 28, 0.82);
+}
+
+.routingQuestion {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mapUnavailable {
+  padding: 16px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--moss);
+}
+
+/* [Responsible-AI] Provenance line under the explanation eyebrow: says whether
+   the bars are SHAP values, LLM self-report, the keyword surrogate, or the
+   offline simulation. */
+.explSource {
+  margin-top: 4px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--pine-soft);
+}
+
+.explSource[data-source='llm'],
+.explSource[data-source='keyword'],
+.explSource[data-source='simulation'],
+.explSource[data-source='unknown'] {
+  color: #A86C1B;
+}
+
+/* [XRAI] Counterfactual ("what would change this?") block under the SHAP bars. */
+.counterfactualBlock {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed var(--line);
+  background: rgba(246, 241, 231, 0.5);
+}
+
+.counterfactualText {
+  margin: 6px 0 4px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.counterfactualFoot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--moss);
+}
+
+/* ============================================================
+   Clarifying interview — the chat thread
+   (docs/design/specs/2026-09-26-clarifying-chat-interview-design.md)
+   ============================================================ */
+.chat {
+  padding: 20px;
+}
+
+.chatHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chatProgress {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--moss);
+}
+
+.thread {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bubbleAgent {
+  align-self: flex-start;
+  border-bottom-left-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.bubblePatient {
+  align-self: flex-end;
+  border-bottom-right-radius: 6px;
+  background: var(--pine);
+  color: var(--paper);
+}
+
+.bubbleMuted {
+  color: var(--moss);
+  font-style: italic;
+}
+
+.answerForm {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.quickReplies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.answerRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.answerInput {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chatFoot {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--moss);
+}
+
+@media (max-width: 480px) {
+  .bubble {
+    max-width: 100%;
+  }
+  .answerRow {
+    flex-direction: column;
+  }
+}
+
+/* ---- AI models used (LLM router tiers) ---------------------------------------- */
+.modelSummary,
+.modelEmpty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--moss);
+}
+
+.modelWhat {
+  font-weight: 400;
+  color: var(--moss);
+}
+
+.modelMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--moss);
+}
+
+.modelName {
+  font-family: var(--ff-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.modelNote {
+  color: var(--pine-soft);
+}
+
+.modelTag {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+  font-size: 11px;
+  color: var(--moss);
+  list-style: none;
+}
+
+.tierBadge {
+  flex: none;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.tierFast { background: #e6f2ea; color: #1f5c38; border-color: #bfdcc9; }
+.tierDeep { background: #e3ecf7; color: #1d4f86; border-color: #bcd0ea; }
+.tierMax { background: #fbeedc; color: #8a4b00; border-color: #efcf9f; }
+.tierOther { background: #efefec; color: #55594f; border-color: #dcdcd6; }
+
+/* English original under a translated question/rationale (Bilingual). */
+.englishLine {
+  display: block;
+  margin-top: 0.35em;
+  font-size: 0.85em;
+  opacity: 0.75;
+}

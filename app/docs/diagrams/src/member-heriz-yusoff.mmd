@@ -1,0 +1,12 @@
+flowchart LR
+    IN["Acuity + safety<br>+ routing"] --> Q{"Low confidence<br>or safety trigger?"}
+    Q -->|no| PASS["No escalation<br>patient gets the answer"]
+    Q -->|yes| ESC["Create escalation"]
+    ESC --> HO@{ icon: "mdi:clipboard-pulse", form: "square", label: "Clinician-Handoff", pos: "b" }
+    HO --> PKT["Summary, evidence,<br>citations, SHAP"]
+    PKT --> CLIN@{ icon: "mdi:doctor", form: "square", label: "Clinician queue", pos: "b" }
+    CLIN --> DEC["Clinician records<br>the final decision"]
+    DEC --> GT["Ground-truth log<br>real labels for accuracy"]
+    style ESC fill:#ffe6cc
+    style CLIN fill:#d5e8d4
+    style GT fill:#fff2cc

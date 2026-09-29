@@ -1,0 +1,49 @@
+%% CareRoute AI — agent containers and the transport switch.
+%% Editable source for the draw.io / Mermaid rendering. Paste into
+%% https://app.diagrams.net (Arrange > Insert > Advanced > Mermaid) or any
+%% Mermaid renderer. The interactive version with the conclusion cards is
+%% careroute-agents.html (built from careroute-agents.architecture.json).
+%%
+%% NOTE ON WHAT THIS SHOWS: the split below is what the APPLICATION supports
+%% (AGENT_TRANSPORT=http). What is DEPLOYED is the monolith image with every
+%% agent in-process — see careroute_ai_infra/docs/diagrams/careroute-aws.drawio.
+flowchart LR
+  P["Patient / Staff UI
+  Next.js :8080"]
+
+  subgraph task["one ECS task - ten containers on ONE compute"]
+    G["intake-gateway
+    public API + SSE + orchestrator :8000"]
+    R[("redis :6379
+    escalation queue + audit trail")]
+
+    subgraph agents["AGENT_TRANSPORT=http - reachable only inside the task"]
+      C["classifier-agent :8101
+      trained model"]
+      S["safety-agent :8102
+      red-flag rules"]
+      RT["routing-agent :8103
+      clinics + hours"]
+      H["hitl-agent :8105
+      review decision"]
+      RF["reflection-agent :8104
+      critic pass"]
+      HO["handoff-agent :8106
+      clinician packet"]
+      L["llm-gateway :8107
+      ONLY provider key"]
+      RG[("rag-service :8108
+      corpus + embedder")]
+    end
+  end
+
+  P -->|"HTTPS + SSE"| G
+  G -->|"POST /v1/invoke"| C
+  G --> S
+  G --> RT
+  G --> H
+  G --> RF
+  G --> HO
+  G -->|"write-through"| R
+  C -.->|"retrieval"| RG
+  HO -.->|"completions"| L

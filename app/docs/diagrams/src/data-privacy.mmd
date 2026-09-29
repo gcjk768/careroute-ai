@@ -1,0 +1,21 @@
+flowchart LR
+    RAW@{ icon: "mdi:card-account-details", form: "square", label: "Raw text, may hold NRIC", pos: "b" }
+    RL@{ icon: "mdi:speedometer-slow", form: "square", label: "Rate limiter", pos: "b" }
+    GUARD@{ icon: "mdi:shield-alert", form: "square", label: "Input guardrail", pos: "b" }
+    BLOCK@{ icon: "mdi:cancel", form: "square", label: "Blocked, no agent sees it", pos: "b" }
+    RED@{ icon: "mdi:eye-off", form: "square", label: "PII redaction", pos: "b" }
+    MASK@{ icon: "mdi:incognito", form: "square", label: "Masked text", pos: "b" }
+    AGENTS@{ icon: "mdi:robot", form: "square", label: "The agents", pos: "b" }
+    AUDIT@{ icon: "mdi:database-lock", form: "square", label: "Audit log", pos: "b" }
+    PROV@{ icon: "mdi:cloud-outline", form: "square", label: "External LLM", pos: "b" }
+    OUTG@{ icon: "mdi:shield-check", form: "square", label: "Output guardrail", pos: "b" }
+    PATIENT@{ icon: "mdi:clipboard-text", form: "square", label: "Patient sees the result", pos: "b" }
+
+    RAW --> RL --> GUARD
+    GUARD -->|attack| BLOCK
+    GUARD -->|clean| RED --> MASK
+    MASK --> AGENTS
+    MASK --> AUDIT
+    MASK --> PROV
+    RAW -.->|never forwarded| PROV
+    AGENTS --> OUTG --> PATIENT

@@ -1,0 +1,138 @@
+# Checkov configuration — a CURATED baseline, not a mute button.
+# =============================================================================
+# The problem this solves. Before it, `checkov` reported ~53 findings and every
+# one carried the same weight, so a reviewer could not tell a deliberate,
+# costed demo trade-off from a real regression. A gate whose output is
+# undifferentiated noise is a gate nobody reads, which is worse than no gate:
+# it converts a security report into a scroll.
+#
+# THE RULE FOR EDITING THIS FILE
+#   Skip only a check that is (a) a deliberate decision, (b) written down here
+#   with the reason, and (c) correct for THIS environment specifically.
+#   Never skip a check for something we intend to fix — those stay red on
+#   purpose, and the list of what stays red is the honest part of this file.
+#
+# DELIBERATELY NOT SKIPPED, so they keep showing up:
+#   CKV_AWS_2, CKV2_AWS_20, CKV_AWS_103              — no TLS on the ALB.
+#       Real, and the largest remaining gap. Fixed by setting
+#       acm_certificate_arn; empty only because the demo has no domain.
+#   (CKV_AWS_378 is the ALB->task hop inside the VPC, which a certificate does
+#   NOT fix; it is skipped inline on the target groups in modules/alb.)
+#   CKV_AWS_51                                        — mutable ECR tags.
+#       The module defaults to IMMUTABLE; live/demo overrides it only while
+#       images are hand-pushed to `:latest`. It should stay visible until the
+#       app pipeline pushes a commit SHA.
+#   CKV_AWS_91                                        — no ALB access logs.
+#       Available now (enable_alb_access_logs); off by default for S3 cost.
+#   CKV2_AWS_11                                       — no VPC flow logs.
+#       Available now (enable_flow_logs); off by default, bills per GB.
+#   CKV2_AWS_28                                       — no WAF on the ALB.
+#       Not built. For a healthcare app this is a genuine gap, not a trade-off,
+#       and is recorded as such in docs/vault/Lecture Alignment.md §9.
+#
+# Run locally:  checkov -d . --config-file .checkov.yaml
+# =============================================================================
+
+framework:
+  - terraform
+
+skip-path:
+  - .*/\.terragrunt-cache/.*
+
+# Soft-fail matches .gitlab-ci.yml: the security gates REPORT so the demo's
+# intentional trade-offs surface for review, rather than blocking a pipeline
+# whose one hard gate is `gitleaks`.
+soft-fail: true
+
+skip-check:
+  # ── S3: the artifacts bucket ────────────────────────────────────────────
+  # CKV_AWS_145 — SSE-KMS instead of SSE-S3 (AES256).
+  #   A customer-managed key is ~$1/month plus per-request charges, and buys
+  #   key rotation and a separate access-control plane. Worth it for real PHI;
+  #   not for a synthetic dataset in a stack that is destroyed the same day.
+  #   Revisit together with the "rotate encryption keys" line of LLMSecOps p117.
+  - CKV_AWS_145
+  # CKV_AWS_144 — cross-region replication.
+  #   A second region's storage and transfer cost to protect a bucket that is
+  #   deliberately destroyed after each demo. The DR requirement is "re-run
+  #   terragrunt apply".
+  - CKV_AWS_144
+  # CKV_AWS_18 — S3 server access logging.
+  #   Would need a SECOND bucket to log into (a bucket cannot usefully log to
+  #   itself), doubling the teardown surface. CloudTrail data events are the
+  #   better answer when there is real data; neither is built.
+  - CKV_AWS_18
+
+  # ── CloudWatch Logs ─────────────────────────────────────────────────────
+  # CKV_AWS_338 — retain logs for at least one year.
+  #   live/demo retains 3 days deliberately: retention is the entire CloudWatch
+  #   cost here, and a stack that exists for an afternoon has nothing to retain.
+  #   staging uses 14. A real environment should meet the check.
+  - CKV_AWS_338
+  # CKV_AWS_158 — log group encrypted with a CMK.
+  #   Same trade as CKV_AWS_145. Logs are redacted at source (app/redact.py:
+  #   prompt and response content is never logged), so the residual risk is low.
+  - CKV_AWS_158
+
+  # ── ECS / networking: the cost-minimal posture ──────────────────────────
+  # CKV_AWS_333 — ECS service with assign_public_ip = true.
+  #   This IS the demo's cost decision: tasks in public subnets with public IPs
+  #   means no NAT gateway (~$43/month saved). They are not reachable — the
+  #   security group accepts ingress from the ALB only. live/staging sets
+  #   public_networking = false and runs the private shape.
+  - CKV_AWS_333
+  # CKV_AWS_382 — security group with unrestricted egress.
+  #   The tasks call ECR, the hosted LLM API, OneMap and CloudWatch: public
+  #   endpoints with no stable CIDR. Restricting egress means interface VPC
+  #   endpoints, which are ~$58/month for the four needed — more than the rest
+  #   of this stack. Available behind enable_interface_endpoints.
+  - CKV_AWS_382
+  # CKV_AWS_260 — security group allowing 0.0.0.0/0 on port 80.
+  #   The public demo ALB is the entry point, so this is the intended rule.
+  #   policy/terraform.rego warns on every internet-open ingress precisely so a
+  #   reviewer confirms the match is the ALB and nothing else — that check is
+  #   better targeted than this one, and it is not skipped.
+  - CKV_AWS_260
+  # CKV_AWS_150 — load balancer deletion protection.
+  #   Directly contradicts the create-and-destroy model and the scheduled
+  #   auto-destroy that keeps this project's costs near zero.
+  - CKV_AWS_150
+
+  # ── Secrets Manager ─────────────────────────────────────────────────────
+  # CKV2_AWS_57 — automatic rotation.
+  #   These secrets are re-created from CI variables on every apply and the
+  #   stack is destroyed after each demo, so a 30-day rotation schedule would
+  #   never fire. Rotating the UPSTREAM credential (the OpenAI key, the OneMap
+  #   password) is a real control and lives outside Terraform.
+  - CKV2_AWS_57
+  # CKV_AWS_149 — secret encrypted with a CMK.
+  #   Same trade as CKV_AWS_145.
+  - CKV_AWS_149
+
+  # ── DynamoDB: the shared state table (off by default) ───────────────────
+  # CKV_AWS_119 — table encrypted with a CMK.
+  #   DynamoDB encrypts every table at rest regardless; this check asks for a
+  #   customer-managed key on top. Same trade as CKV_AWS_145, and revisited with
+  #   it the day the table holds real patient data. PITR (CKV_AWS_28) is NOT
+  #   skipped: the module enables it by default.
+  - CKV_AWS_119
+
+  # ── ECR ─────────────────────────────────────────────────────────────────
+  # CKV_AWS_136 — repository encrypted with a CMK.
+  #   AES256 by default; see CKV_AWS_145. Note CKV_AWS_51 (immutable tags) is
+  #   deliberately NOT skipped.
+  - CKV_AWS_136
+
+  # ── RDS (off by default; the app has no database client at all) ─────────
+  # CKV_AWS_157 — multi-AZ.
+  #   Doubles the instance cost for a module that currently has no consumer.
+  - CKV_AWS_157
+  # CKV_AWS_353, CKV_AWS_354 — Performance Insights, and its CMK.
+  #   Cost, on a database nothing queries yet.
+  - CKV_AWS_353
+  - CKV_AWS_354
+  # CKV_AWS_226, CKV_AWS_293 — auto minor version upgrades / deletion protection.
+  #   Deletion protection contradicts create-and-destroy (see CKV_AWS_150); the
+  #   module exposes deletion_protection as a variable for environments where it
+  #   is right.
+  - CKV_AWS_293

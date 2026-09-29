@@ -1,0 +1,15 @@
+flowchart LR
+    IN@{ icon: "mdi:account-voice", form: "square", label: "Patient text", pos: "b" } --> N@{ icon: "mdi:text-search", form: "square", label: "Normalise", pos: "b" }
+    N --> S["Clean sentence<br>+ keywords"]
+    S --> ORCH["Orchestrator"]
+    ORCH --> W1["2 Classifier"]
+    ORCH --> W2["3 Safety"]
+    ORCH --> W3["4 Routing"]
+    ORCH --> W4["5 HITL"]
+    ORCH --> W5["6 Reflection"]
+    ORCH --> W6["7 Handoff<br>if escalated"]
+    W1 --> AGG["Aggregate<br>the cited answer"]
+    W5 --> AGG
+    W6 --> AGG
+    style ORCH fill:#e1d5e7
+    style AGG fill:#d5e8d4

@@ -1,0 +1,35 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  font-family: var(--ff-mono);
+  font-weight: 500;
+}
+
+/* size = sm | md | lg */
+.sm {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.md {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.lg {
+  padding: 6px 14px;
+  font-size: 14px;
+}
+
+.dot {
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+  border-radius: 999px;
+}
+
+.label {
+  font-family: var(--ff-sans);
+  font-weight: 400;
+  opacity: 0.8;
+}

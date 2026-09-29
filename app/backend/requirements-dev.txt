@@ -1,0 +1,32 @@
+# Dev/test-only dependencies. Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest==9.0.3
+pytest-asyncio==1.4.0
+pytest-cov==6.0.0
+httpx==0.28.1
+# Report generation (app.ml.report) — needed so the report tests can import it
+# and exercise the PDF + Markdown builders (also used by the report:pdf CI job).
+reportlab==5.0.0
+pyyaml==6.0.2
+# Fairness gate (course tool: Fairlearn) — asserts subgroup accuracy parity
+fairlearn==0.14.0
+# [MLOps] Experiment tracking + Model Registry (optional at runtime: app/ml/model.py
+# guards the import, so training works without it — install to activate tracking).
+mlflow==3.16.1
+# [AI-Security] IBM Adversarial Robustness Toolbox — the evasion attack in
+# tests/test_robustness.py and the membership-inference attack in
+# tests/test_ml_attacks.py.
+#
+# THIS WAS MISSING and both tests' skip guards hid it: `importorskip("art")`
+# skipped the module, pytest exited 5, and test:robustness' exit-5 handler turned
+# that into a green job. Job 16462517271 logged "1 skipped in 0.07s" then
+# "Job succeeded" — the evasion gate had never once executed in CI. A skipped
+# security test reports exactly like a passing one, which is why the dependency
+# it needs belongs here and not in a comment claiming it is already here.
+adversarial-robustness-toolbox==1.20.1
+
+# [Microservices] in-process Redis for tests/test_ms_persistence.py — no server needed.
+fakeredis==2.26.2
+# LangGraph adapter (app/agents/graph.py): a demo/diagram surface, never on the
+# production path, so it is a dev/test dependency only.
+langgraph==1.2.12

@@ -1,0 +1,10 @@
+# Keep the build context small + leak-free.
+node_modules/
+.next/
+dist/
+.vite/
+npm-debug.log*
+.env
+.env.*
+*.md
+.git/

@@ -1,0 +1,9 @@
+[core]
+    remote = s3
+['remote "s3"']
+    url = s3://careroute-demo-artifacts-123456789012/dvc
+['remote "gitlab"']
+    url = https://gitlab.com/api/v4/projects/84456994/packages/generic/dvc
+    method = PUT
+    auth = custom
+    custom_auth_header = PRIVATE-TOKEN

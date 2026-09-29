@@ -1,0 +1,114 @@
+{
+  "_description": "Gold dataset for E2-clarifying-questions (app/evals/plan.py). Owner: Heriz Yusoff. Same shape as tests/fixtures/hitl_cases.json (E5): every row is driven through the REAL deterministic pipeline (intake -> classifier -> safety-override -> hitl, LLM disabled via CAREROUTE_KILL_SWITCH so the trained model + keyword fallback are exercised exactly as production would with no LLM provider), so results are reproducible offline. Every row's should_ask/dimension/acceptable_questions/rationale was VERIFIED against real output before being written down, not assumed -- see scripts probe used while building this fixture. THE POINT: should_ask=False rows cover every distinct reason HITL may decline to ask, not just 'confident enough' -- a red flag, an off-limits acuity, and an already-answered round are each a DIFFERENT mechanism in hitl.py and each needs its own proof.",
+  "_schema": {
+    "id": "stable identifier, used in failure messages",
+    "text": "raw patient input, exactly as a patient would type it",
+    "clarifications": "OPTIONAL: pre-existing answers to seed CaseState.clarifications with (the interview transcript), for the 'budget spent' case",
+    "should_ask": "true = HITL must return action=='ask'; false = HITL must return anything else",
+    "decline_reason": "for should_ask=false rows only: which of HITL's floors explains it -- confident (at or above the 0.8 interview target) | safety (red flag fired) | acuity (P1/P2, off-limits) | budget_spent (INTERVIEW_MAX_QUESTIONS answers already carried)",
+    "dimension": "for should_ask=true rows only: the clinical dimension the returned question probes (onset | severity | duration | associated-symptom | risk-factor)",
+    "expected_feature": "for should_ask=true rows only: the classifier's internal feature name the real pipeline is verified to pick",
+    "acceptable_questions": "for should_ask=true rows only: the exact question text(s) the fixed template bank may return for expected_feature -- verbatim match is expected since the question wording itself comes from a fixed table (classifier.py's _RULES), not free generation; the SELECTION of which one is what varies per case",
+    "rationale": "why a triage nurse would agree with this call"
+  },
+  "cases": [
+    {
+      "id": "ask-vague-unwell",
+      "text": "I feel a bit unwell and off today, nothing specific.",
+      "should_ask": true,
+      "dimension": "associated-symptom",
+      "expected_feature": "cold_symptoms",
+      "acceptable_questions": ["Are you having any difficulty breathing?"],
+      "rationale": "Genuinely vague complaint, no red flag, confidence well below threshold. The one useful follow-up is whether a more specific associated symptom (fever/breathing difficulty) is present -- exactly what a triage nurse would ask first."
+    },
+    {
+      "id": "ask-dont-feel-right",
+      "text": "I don't feel right.",
+      "should_ask": true,
+      "dimension": "associated-symptom",
+      "expected_feature": "cold_symptoms",
+      "acceptable_questions": ["Are you having any difficulty breathing?"],
+      "rationale": "Even vaguer than the above -- confirms the same, correct question is selected consistently for maximally under-specified input, not just one lucky phrasing."
+    },
+    {
+      "id": "ask-vague-ache-days",
+      "text": "I've had this vague ache for a few days now, not sure what it is.",
+      "should_ask": true,
+      "dimension": "associated-symptom",
+      "expected_feature": ["breathless", "cold_symptoms"],
+      "acceptable_questions": ["Are you short of breath while resting, or only when you move around?", "Are you having any difficulty breathing?"],
+      "rationale": "The gap is breathing. Either the breathlessness question or the fever/breathing screen (which asks about difficulty breathing) probes it. 2026-09-25: this row used to pass VACUOUSLY -- the model escalated it without asking, and unasked rows are not graded here. With sex-blind scoring (model a3e69cf16afa) it is asked, as the row says it should be, and the model picks the fever/breathing screen by 0.002 over the next candidate. It no longer shows a DIFFERENT gap from the rows above: on this model the picker chooses that screen for most low-evidence complaints (tracked in the vault Changelog as a limitation)."
+    },
+    {
+      "id": "noask-confident-headache",
+      "text": "I have had a mild headache since this morning.",
+      "should_ask": false,
+      "decline_reason": "confident",
+      "rationale": "Classifier is confident enough (>=0.50) on its own; asking would interrupt the patient for no decision-relevant reason."
+    },
+    {
+      "id": "noask-confident-cough",
+      "text": "I have a cough.",
+      "should_ask": false,
+      "decline_reason": "confident",
+      "rationale": "Single, common, low-acuity symptom -- the classifier is confident and no question is proposed at all."
+    },
+    {
+      "id": "noask-confident-minor-cut",
+      "text": "I have a small clean cut on my finger from cooking, nothing else.",
+      "should_ask": false,
+      "decline_reason": "confident",
+      "rationale": "Clear, benign, self-described mechanism of injury -- nothing to gain by asking."
+    },
+    {
+      "id": "noask-confident-sprain",
+      "text": "I sprained my ankle playing football, mild swelling, can still walk.",
+      "should_ask": false,
+      "decline_reason": "confident",
+      "rationale": "Weight-bearing preserved and mechanism is clear -- a routine, confident primary-care read."
+    },
+    {
+      "id": "ask-rash-onset",
+      "text": "I have a bit of an itchy rash, not sure what caused it.",
+      "should_ask": true,
+      "dimension": "onset",
+      "expected_feature": "onset",
+      "acceptable_questions": ["When did this start, and did it come on suddenly or gradually?"],
+      "rationale": "2026-09-26 interview design: a 0.75 call is one fact short of the 0.8 target, so the interview asks rather than decides. The complaint names a symptom, so the symptom SCREEN is not the right question (the value-of-information pick would ask about chest pain); the first uncovered nurse dimension is onset. Was 'noask-confident-rash' under the 0.5 single-question rule."
+    },
+    {
+      "id": "noask-redflag-chest-pain",
+      "text": "Sudden crushing chest pain radiating to my left arm, sweating and short of breath.",
+      "should_ask": false,
+      "decline_reason": "safety",
+      "rationale": "SAFETY-CRITICAL. cardiac_chest_pain fires -- must escalate immediately. Asking a follow-up while the patient describes a possible heart attack is the one failure mode the whole feature must never have."
+    },
+    {
+      "id": "noask-redflag-stroke",
+      "text": "My face is drooping on one side and I have slurred speech since an hour ago.",
+      "should_ask": false,
+      "decline_reason": "safety",
+      "rationale": "SAFETY-CRITICAL. stroke_signs fires -- thrombolysis window makes any delay dangerous. Same class of failure as the chest-pain row, different rule."
+    },
+    {
+      "id": "noask-acuity-floor-fainted",
+      "text": "I fainted for a moment earlier today.",
+      "should_ask": false,
+      "decline_reason": "acuity",
+      "rationale": "Below the 0.8 interview target (0.76) with a dimension question available (duration) and NO red-flag rule fired -- but the trained model reads a syncope as P2_EMERGENT, which is off-limits for asking regardless of how useful the question would be. Proves the acuity floor fires even when the interview alone would say 'ask'. 2026-09-26: replaced 'noask-acuity-floor-dizzy', which the current model reads as P4 at 0.58 (it is now asked, correctly)."
+    },
+    {
+      "id": "noask-budget-spent",
+      "text": "I feel a bit unwell and off today, nothing specific.",
+      "clarifications": [
+        {"feature": "cold_symptoms", "source": "template", "question": "Are you having any difficulty breathing?", "answer": "no", "statement": "difficulty breathing"},
+        {"feature": "duration", "source": "fallback", "question": "How many hours or days has this been going on, and is it getting worse, better or staying the same?", "answer": "not sure"},
+        {"feature": "severity", "source": "fallback", "question": "How bad is it right now on a scale of 1 to 10, and does it stop you doing your normal activities?", "answer": "not sure"},
+        {"feature": "associated", "source": "fallback", "question": "Have you noticed anything else along with it, such as fever, vomiting, dizziness or a rash?", "answer": "not sure"}
+      ],
+      "should_ask": false,
+      "decline_reason": "budget_spent",
+      "rationale": "Identical text to ask-vague-unwell, but the transcript already holds INTERVIEW_MAX_QUESTIONS (4) answers. The budget must hold even when the same case would otherwise ask again -- the classifier itself declines to re-propose, so this exercises the 'no clarification proposed at all' path, and HITL then applies the 0.5 floor exactly as before the interview existed (this case escalates). Was 'noask-already-asked' (one answer) under the single-question rule."
+    }
+  ]
+}

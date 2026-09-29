@@ -1,0 +1,30 @@
+{
+  "name": "careroute-ai-frontend",
+  "private": true,
+  "version": "0.2.0",
+  "description": "CareRoute AI — clinical intelligence console (patient triage, agent pipeline, clinician HITL, governance). Next.js App Router + CSS Modules.",
+  "scripts": {
+    "dev": "next dev -p 5173",
+    "build": "next build",
+    "start": "next start -p 5173",
+    "lint": "next lint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "framer-motion": "^11.3.19",
+    "next": "^15.5.24",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.5.24"
+  },
+  "overrides": {
+    "postcss": "^8.5.28",
+    "nanoid": "^3.3.18"
+  }
+}

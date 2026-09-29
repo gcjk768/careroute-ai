@@ -1,0 +1,5 @@
+# ZAP API scan rule overrides (zap-api-scan.py -c). Format: rule-id<TAB>ACTION<TAB>url-regex-or-note.
+# 100001 Unexpected Content-Type: /api/triage/stream is Server-Sent Events by design and
+# declares text/event-stream in /openapi.json. Out of scope for that URL only; every other
+# endpoint is still checked by this rule.
+100001	OUTOFSCOPE	.*/api/triage/stream.*

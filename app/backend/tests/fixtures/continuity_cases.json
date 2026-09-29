@@ -1,0 +1,43 @@
+{
+  "description": "E14 multi-turn continuity gold set. Each case is a complaint that makes the Severity-Classifier propose a clarifying question and the HITL policy node choose `ask` (verified against the live pipeline, LLM disabled, 2026-09-17; re-verified 2026-09-23 after the 22 -> 51 category widening, which made the musculoskeletal complaints (back pain, knee) classify confidently (0.86-0.90) and stop reaching the ask branch, so they were replaced by complaints that still do; re-pinned again 2026-09-23 after the retrain on the corrected features (\"feeling off today\" now classifies at 0.52) — these are the inputs that actually reach the ask branch, not inputs that look like they should). `answer` is what the patient replies on the second turn; `implies` says what that answer means clinically, so a decision that ignores it can be told apart from one that acts on it. Turn 2 replays the SAME raw_text with the answer carried on the request, which is how the design intends a resumed case to work: stateless and fully replayable.",
+  "cases": [
+    {
+      "id": "off-confirms",
+      "text": "I feel a bit off today",
+      "answer": "yes, I also have a fever and I am struggling to breathe",
+      "implies": "confirms",
+      "note": "The asked gap is present after all. A resumed run that ignores this reaches the same decision as one told nothing."
+    },
+    {
+      "id": "off-denies",
+      "text": "I feel a bit off today",
+      "answer": "no fever, and my breathing is completely normal",
+      "implies": "denies",
+      "note": "The asked gap is absent. The question was asked to resolve uncertainty, so a denial should resolve it."
+    },
+    {
+      "id": "unwell-confirms",
+      "text": "feeling generally unwell and tired",
+      "answer": "yes, high fever since last night and shortness of breath",
+      "implies": "confirms"
+    },
+    {
+      "id": "unwell-denies",
+      "text": "feeling generally unwell and tired",
+      "answer": "no fever at all and no trouble breathing",
+      "implies": "denies"
+    },
+    {
+      "id": "stomach-confirms",
+      "text": "stomach discomfort since yesterday",
+      "answer": "yes I have a fever too",
+      "implies": "confirms"
+    },
+    {
+      "id": "stomach-denies",
+      "text": "stomach discomfort since yesterday",
+      "answer": "no fever, no breathing problems, just the stomach",
+      "implies": "denies"
+    }
+  ]
+}

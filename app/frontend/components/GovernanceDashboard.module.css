@@ -1,0 +1,346 @@
+.loading {
+  color: var(--moss);
+}
+
+.page {
+  margin: 0 auto;
+  max-width: 72rem;
+}
+
+.header {
+  margin-bottom: 32px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin-top: 8px;
+  font-family: var(--ff-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.intro {
+  margin-top: 12px;
+  max-width: 36rem;
+  font-size: 15px;
+  line-height: 1.625;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.meta {
+  text-align: right;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.metaMoss {
+  color: var(--moss);
+}
+
+.offline {
+  margin-bottom: 16px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--moss);
+}
+
+.kpiRow {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 640px) {
+  .kpiRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .kpiRow {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.mainGrid {
+  margin-top: 24px;
+  display: grid;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .mainGrid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.chartCard {
+  padding: 24px;
+}
+
+@media (min-width: 1024px) {
+  .chartCard {
+    grid-column: span 3 / span 3;
+  }
+}
+
+.chartTitle {
+  margin-top: 4px;
+  font-family: var(--ff-display);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.chartArea {
+  margin-top: 16px;
+  /* 256px before the subgroup ticks were angled; the extra 48px is the taller
+     XAxis band (height={64}) so the labels are not clipped. */
+  height: 304px;
+}
+
+.chartNote {
+  margin-top: 12px;
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.6);
+}
+
+.sideCol > * + * {
+  margin-top: 24px;
+}
+
+@media (min-width: 1024px) {
+  .sideCol {
+    grid-column: span 2 / span 2;
+  }
+}
+
+.panel {
+  padding: 24px;
+}
+
+.gapList {
+  margin-top: 16px;
+}
+
+.gapList > * + * {
+  margin-top: 16px;
+}
+
+.gapNote {
+  margin-top: 16px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--pine-soft);
+}
+
+.driftList {
+  margin-top: 16px;
+}
+
+.driftList > * + * {
+  margin-top: 12px;
+}
+
+.kpi {
+  padding: 20px;
+}
+
+.kpiLabel {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+
+.kpiValue {
+  margin-top: 8px;
+  font-family: var(--ff-display);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.kpiFoot {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(20, 35, 28, 0.6);
+}
+
+.gapHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: rgba(20, 35, 28, 0.7);
+}
+
+.gapTrack {
+  margin-top: 6px;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--paper-2);
+}
+
+.gapFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.driftRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.driftLabel {
+  width: 96px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.8);
+}
+
+.driftTrack {
+  height: 8px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--paper-2);
+}
+
+.driftFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.driftTag {
+  width: 64px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* [Responsible-AI] Named fairness + calibration metrics panel (full width,
+   below the chart grid). Same type scale as the KPI tiles, denser layout. */
+.namedPanel {
+  margin-top: 24px;
+}
+
+.metricGrid {
+  margin-top: 16px;
+  display: grid;
+  gap: 16px 24px;
+}
+
+@media (min-width: 640px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .metricGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.metric {
+  padding-top: 12px;
+  border-top: 1px solid rgba(20, 35, 28, 0.1);
+}
+
+.metricValue {
+  margin-top: 6px;
+  font-family: var(--ff-display);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricFoot {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(20, 35, 28, 0.6);
+}
+
+/* [XRAI] Global explanation panel: SHAP importance chart beside the partial
+   dependence table. */
+.globalGrid {
+  margin-top: 16px;
+  display: grid;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .globalGrid {
+    grid-template-columns: 3fr 2fr;
+  }
+}
+
+.globalChart {
+  margin-top: 12px;
+  height: 280px;
+}
+
+.pdpList {
+  margin-top: 12px;
+}
+
+.pdpList > * + * {
+  margin-top: 10px;
+}
+
+.pdpRow {
+  padding-top: 10px;
+  border-top: 1px solid rgba(20, 35, 28, 0.1);
+}
+
+.pdpLabel {
+  font-size: 13px;
+  color: rgba(20, 35, 28, 0.8);
+}
+
+.pdpValues {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.pdpCell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--ff-mono);
+  font-size: 12px;
+}
+
+.pdpGrid {
+  color: var(--pine-soft);
+}
+
+.pdpGrid::after {
+  content: '→';
+  margin-left: 4px;
+}
+
+.pdpP {
+  font-weight: 600;
+  color: var(--pine);
+  font-variant-numeric: tabular-nums;
+}

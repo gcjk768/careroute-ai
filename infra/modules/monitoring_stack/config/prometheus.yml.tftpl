@@ -1,0 +1,60 @@
+# [MLOps] Prometheus scrape + alerting config — AWS deployment.
+#
+# This mirrors careroute_ai_app/monitoring/prometheus.yml. Two differences, both
+# forced by the platform rather than by choice:
+#
+#   1. Targets are Cloud Map DNS names, not docker-compose service names. The
+#      tasks share no compose network; they find each other through the private
+#      DNS namespace this stack registers them in.
+#   2. Paths are under /tmp because the config is written at boot by the
+#      container entrypoint (Fargate has no bind mount) and the images run as
+#      non-root, so /etc/prometheus is not writable.
+#
+# The `service: careroute-backend` label is load-bearing: every aggregation in
+# alert.rules.yml carries `service` through, and alertmanager.yml groups and
+# inhibits on it. Drop the label and the inhibit rule silently stops matching.
+global:
+  scrape_interval: ${scrape_interval}
+  evaluation_interval: 15s
+
+rule_files:
+  - /tmp/alert.rules.yml
+  - /tmp/platform.rules.yml   # infra-owned; see config/platform.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["${alertmanager_target}"]
+
+scrape_configs:
+  # DNS service discovery, not a static target. The Cloud Map record is a
+  # MULTIVALUE A record — one IP per running backend task — and a static target
+  # would resolve it to ONE of them per scrape, hopping between tasks. Every
+  # counter would then jump up and down as the scrape landed on a different
+  # process, and rate() would read each drop as a counter reset. dns_sd scrapes
+  # every task as its own target (instance = task IP); the dashboard and the
+  # alert rules already sum() across instances, so one task or ten read the same.
+  - job_name: careroute-backend
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["${backend_host}"]
+        type: A
+        port: ${backend_port}
+        refresh_interval: 30s
+    relabel_configs:
+      - target_label: service
+        replacement: careroute-backend
+
+  # Alertmanager's own metrics: alerts held by state, notifications sent and
+  # failed per integration. In-VPC over Cloud Map, like the backend.
+  - job_name: alertmanager
+    dns_sd_configs:
+      - names: ["${alertmanager_host}"]
+        type: A
+        port: 9093
+        refresh_interval: 30s
+
+  # Prometheus self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,16 @@
+# OPTIONAL agentic extras (2026-09-16). Core requirements and CI do not need these;
+# every feature that uses them degrades when they are absent.
+#
+#   fastembed  local ONNX sentence embeddings (BAAI/bge-small-en-v1.5, no torch) for
+#              dense + hybrid retrieval in app/rag.py. Without it retrieval is lexical.
+#   mcp        Model Context Protocol SDK for app/mcp_server.py.
+#
+# Pinned to versions that resolve with EVERY existing package unchanged. mcp>=1.28.1
+# (fixes GHSA-j975-95f5-7wqh, -9h52-p55h-vw2f, -jpw9-pfvf-9f58, -vj7q-gjh5-988w)
+# needs starlette 1.x + pydantic 2.13, which requirements.txt now pins.
+# Install with the current environment as a constraint:
+#
+#   pip freeze > constraints.txt
+#   pip install -r requirements-agentic.txt -c constraints.txt
+fastembed==0.8.0
+mcp==1.28.1

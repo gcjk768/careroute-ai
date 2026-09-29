@@ -1,0 +1,194 @@
+/* CareRoute AI — global design tokens + base layer + shared design-system classes.
+ * Replaces the former Tailwind theme/@layer setup. Component-specific styling now
+ * lives in colocated *.module.css files that read these tokens. The handful of
+ * classes defined here (.card, .btn-*, .eyebrow, .hairline, .focusable) are the
+ * shared "design system" and are intentionally global so every surface stays
+ * visually consistent. */
+
+:root {
+  /* Palette (was the Tailwind theme colors) */
+  --paper: #f6f1e7;
+  --paper-2: #efe8d8;
+  --ink: #14231c;
+  --pine: #1f4c3a;
+  --pine-soft: #3e7a5e;
+  --moss: #8aa893;
+  --coral: #e5533b;
+  --amber: #e8a13c;
+  --line: rgba(20, 35, 28, 0.12);
+
+  /* Font stacks — families loaded via <link> to Google Fonts in app/layout.jsx */
+  --ff-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --ff-sans: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --ff-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(20, 35, 28, 0.04), 0 12px 28px -18px rgba(20, 35, 28, 0.28);
+  --shadow-lift: 0 2px 6px rgba(20, 35, 28, 0.06), 0 24px 48px -24px rgba(20, 35, 28, 0.32);
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  /* warm paper base with a faint layered gradient for depth */
+  background-image:
+    radial-gradient(120% 90% at 100% 0%, rgba(62, 122, 94, 0.1), transparent 55%),
+    radial-gradient(90% 70% at 0% 100%, rgba(229, 83, 59, 0.06), transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Grain overlay — subtle film texture across the whole app */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: rgba(31, 76, 58, 0.16);
+}
+
+/* Slim clinical scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 35, 28, 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(20, 35, 28, 0.2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* App content sits above the grain layer painted on <body>. */
+.app-root {
+  position: relative;
+  z-index: 2;
+}
+
+/* ── Shared design-system classes ─────────────────────────────────────────── */
+
+/* Editorial eyebrow label */
+.eyebrow {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--pine-soft);
+}
+
+.card {
+  position: relative;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #fbf8f1;
+  box-shadow: var(--shadow-card);
+}
+
+.hairline {
+  border-top: 1px solid var(--line);
+}
+
+/* Focus ring that matches the clinical palette */
+.focusable:focus-visible {
+  outline: 2px solid rgba(31, 76, 58, 0.55);
+  outline-offset: 2px;
+}
+
+/* Primary action */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  cursor: pointer;
+  border-radius: 999px;
+  background: var(--pine);
+  padding: 10px 20px;
+  font-family: var(--ff-sans);
+  font-weight: 500;
+  color: var(--paper);
+  transition: all 0.2s ease;
+}
+.btn-primary:hover {
+  background: var(--ink);
+  box-shadow: var(--shadow-lift);
+}
+.btn-primary:active {
+  transform: translateY(1px);
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 8px 16px;
+  font-family: var(--ff-sans);
+  font-weight: 500;
+  color: var(--ink);
+  transition: background-color 0.2s ease;
+}
+.btn-ghost:hover {
+  background: var(--paper-2);
+}
+
+/* Animated ECG stroke (brand glyph) */
+.ecg-path {
+  stroke-dasharray: 1000;
+  animation: ecgdraw 3.4s ease-in-out infinite;
+}
+@keyframes ecgdraw {
+  0% {
+    stroke-dashoffset: 1000;
+    opacity: 0.15;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.15;
+  }
+}
+
+/* Hide anything marked print:hidden when printing the patient summary. */
+@media print {
+  .print-hidden {
+    display: none !important;
+  }
+}

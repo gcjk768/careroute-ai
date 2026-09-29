@@ -1,0 +1,115 @@
+.page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 0 24px;
+}
+
+.cardBox {
+  width: 100%;
+  max-width: 28rem;
+  overflow: hidden;
+}
+
+.topBand {
+  height: 6px;
+  width: 100%;
+  background: var(--pine);
+}
+
+.form {
+  padding: 28px;
+}
+
+@media (min-width: 640px) {
+  .form {
+    padding: 32px;
+  }
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brandText {
+  line-height: 1;
+}
+
+.brandName {
+  font-family: var(--ff-display);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.brandTag {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--pine-soft);
+}
+
+.title {
+  margin-top: 24px;
+  font-family: var(--ff-display);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.intro {
+  margin-top: 4px;
+  font-size: 14px;
+  color: rgba(20, 35, 28, 0.6);
+}
+
+.nameLabel {
+  margin-top: 24px;
+  display: block;
+}
+
+.input {
+  margin-top: 8px;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(246, 241, 231, 0.6);
+  padding: 10px 12px;
+  font-size: 15px;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--moss);
+}
+
+.submit {
+  margin-top: 24px;
+  width: 100%;
+}
+
+.footerRow {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.backLink {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--moss);
+}
+
+.backLink:hover {
+  color: var(--ink);
+}
+
+.demoNote {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  color: var(--moss);
+}

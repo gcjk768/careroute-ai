@@ -1,0 +1,28 @@
+# Platform alerting rules — owned by THIS repo, not a copy of the app's.
+#
+# alert.rules.yml is a verbatim copy of the app repo's (the config_drift job
+# diffs them), so a rule that exists only because of how the platform finds
+# the backend lives here instead.
+#
+# Why this rule exists: Prometheus finds backend tasks by DNS (dns_sd_configs,
+# see prometheus.yml.tftpl), and Cloud Map drops a task from DNS as soon as ECS
+# marks it unhealthy. With every task gone there is no target left at all, so
+# there is no `up` series to equal 0 and the app's BackendMetricsDown can never
+# fire — the outage it exists to report is exactly the one it cannot see.
+# absent() fires on the missing series instead.
+#
+# `service: careroute-backend` is set explicitly because absent() has no source
+# series to inherit it from, and alertmanager.yml groups and inhibits on it.
+groups:
+  - name: careroute-platform
+    rules:
+      - alert: BackendNoScrapeTargets
+        expr: absent(up{job="careroute-backend"})
+        for: 3m
+        labels:
+          severity: critical
+          aspect: mlops
+          service: careroute-backend
+        annotations:
+          summary: "No CareRoute backend task is registered in Cloud Map"
+          description: "Prometheus has found no backend task to scrape for 3m: every task is stopped, unhealthy or deregistered."

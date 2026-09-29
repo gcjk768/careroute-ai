@@ -1,0 +1,270 @@
+# [MLOps] CareRoute AI alerting rules (evaluated by Prometheus).
+#
+# Metrics come from backend/app/metrics.py:
+#   careroute_model_predict_seconds   — inference latency histogram (incl. SHAP)
+#   careroute_agent_duration_seconds  — per-agent step duration {agent, source}
+#   careroute_triage_requests_total   — triage requests {outcome}
+#   careroute_guardrail_blocks_total  — inputs blocked by the input guardrail
+#   careroute_escalations_total       — cases escalated to a clinician
+#   careroute_rate_limited_total      — requests rejected (429) by the rate limiter
+#
+# EVERY aggregation below carries `service` through. `sum()` / `sum() by (le)`
+# drops every label not named, including the `service: careroute-backend` label
+# prometheus.yml attaches to the scrape target — so these alerts fired with NO
+# service label. Two things depended on it and both were silently dead:
+# alertmanager.yml's `route.group_by: ["alertname", "service"]` grouped on an
+# absent label, and its inhibit rule's `equal: ["service"]` could never match
+# BackendMetricsDown (which DOES carry the label, coming straight from `up{...}`)
+# against these — so "backend is down" never suppressed its own downstream
+# latency/escalation noise. Keep `service` in every `by (...)` clause added here.
+groups:
+  - name: careroute-triage
+    rules:
+      # p95 model-inference latency (SHAP included) too high over 5 minutes.
+      - alert: HighInferenceLatencyP95
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(careroute_model_predict_seconds_bucket[5m])) by (le, service)) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+          aspect: mlops
+        annotations:
+          summary: "Triage model p95 inference latency high"
+          description: "p95 severity-model latency is {{ $value | humanizeDuration }} (>1.5s) over 5m."
+
+      # p95 per-agent step latency high — localises WHICH worker is slow.
+      - alert: HighAgentLatencyP95
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(careroute_agent_duration_seconds_bucket[5m])) by (le, agent, service)) > 2
+        for: 5m
+        labels:
+          severity: warning
+          aspect: mlops
+        annotations:
+          summary: "Agent {{ $labels.agent }} p95 step latency high"
+          description: "Agent {{ $labels.agent }} p95 duration is {{ $value | humanizeDuration }} (>2s)."
+
+      # Guardrail-block SPIKE — a burst of blocked inputs signals an attack probe
+      # (prompt-injection / evasion) or a broken client.  [AI-Security]
+      - alert: GuardrailBlockSpike
+        expr: sum(rate(careroute_guardrail_blocks_total[5m])) by (service) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          aspect: ai-security
+        annotations:
+          summary: "Spike in guardrail-blocked requests"
+          description: "Input-guardrail block rate is {{ $value | humanize }}/s over 5m — possible attack probing."
+
+      # Escalation-rate ANOMALY — an unusually HIGH share of cases escalating to a
+      # human can indicate model drift / degraded confidence.  [Responsible-AI]
+      - alert: EscalationRateAnomaly
+        expr: >
+          sum(rate(careroute_escalations_total[15m])) by (service)
+            /
+          clamp_min(sum(rate(careroute_triage_requests_total[15m])) by (service), 0.001) > 0.6
+        for: 10m
+        labels:
+          severity: warning
+          aspect: responsible-ai
+        annotations:
+          summary: "Human-escalation rate anomalously high"
+          description: "{{ $value | humanizePercentage }} of triage requests are escalating (>60%) — check for model drift."
+
+      # No triage traffic being scraped — the backend target may be down.
+      - alert: BackendMetricsDown
+        expr: up{job="careroute-backend"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          aspect: mlops
+        annotations:
+          summary: "CareRoute backend /metrics target is down"
+          description: "Prometheus cannot scrape backend:8000/metrics for 3m."
+
+      # [Microservices] An agent container is failing the gateway: in the last
+      # 5 min calls to it errored, were rejected or hit an open circuit, and
+      # none succeeded. Cases still COMPLETE (degraded, escalated to a human),
+      # which is exactly why this needs an alert — nothing else looks broken.
+      - alert: AgentDown
+        expr: >
+          sum(increase(careroute_agent_calls_total{outcome!="ok"}[5m])) by (agent, service) > 0
+          unless
+          sum(increase(careroute_agent_calls_total{outcome="ok"}[5m])) by (agent, service) > 0
+        for: 1m
+        labels:
+          severity: critical
+          aspect: mlops
+        annotations:
+          summary: "Agent {{ $labels.agent }} is unavailable to the gateway"
+          description: "Every call to the {{ $labels.agent }} container failed in the last 5m; its cases are being escalated to clinicians by default."
+
+      - alert: AgentMetricsDown
+        expr: up{job="careroute-agents"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          aspect: mlops
+        annotations:
+          summary: "{{ $labels.service }} is not being scraped"
+          description: "Prometheus cannot reach {{ $labels.instance }} — the container is down or unreachable."
+
+  # ── LLM cost, quota and latency ────────────────────────────────────────────
+  # LLMSecOps spends ~15 slides on cost guards and quota alerts. The counters to
+  # do it (careroute_llm_tokens_total, careroute_llm_cost_usd_total) landed when
+  # Gap 2 closed and then nothing watched them — a counter nobody alerts on is a
+  # dashboard decoration, and the failure it exists to catch is precisely the one
+  # nobody is looking at a dashboard for.
+  - name: careroute-llm
+    rules:
+      # The courseware's efficiency gate is $0.12 per task. Alert at 80% of it,
+      # measured as spend per COMPLETED TRIAGE rather than as a raw burn rate:
+      # spend rising because traffic rose is not an incident, and an absolute
+      # dollars-per-hour threshold cannot tell the two apart.
+      - alert: LLMCostPerTriageHigh
+        expr: >
+          sum(rate(careroute_llm_cost_usd_total[30m])) by (service)
+            /
+          clamp_min(sum(rate(careroute_triage_requests_total[30m])) by (service), 0.001) > 0.096
+        for: 15m
+        labels:
+          severity: warning
+          aspect: llmops
+        annotations:
+          summary: "LLM spend per triage approaching the course gate"
+          description: "{{ $value }} USD per triage over 30m (>80% of the $0.12 gate)."
+
+      # Token QUOTA, which is a different failure from cost: an unpriced model
+      # burns quota while contributing exactly $0.00 to the cost counter above, by
+      # design (llm_cost.py withholds money for unpriced models rather than
+      # reporting a misleading zero). Without this rule that traffic is invisible.
+      - alert: LLMTokenBurnHigh
+        expr: sum(rate(careroute_llm_tokens_total[15m])) by (service) > 2000
+        for: 10m
+        labels:
+          severity: warning
+          aspect: llmops
+        annotations:
+          summary: "LLM token burn rate high"
+          description: "{{ $value | humanize }} tokens/sec over 15m — check for a retry loop or a runaway agent."
+
+      # p95 LLM latency. Separate from HighAgentLatencyP95 because an agent that
+      # fell back to its deterministic path is FAST — agent latency can look
+      # healthy at the exact moment every provider is timing out.
+      - alert: HighLLMLatencyP95
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(careroute_llm_latency_seconds_bucket[10m])) by (le, service)) > 8
+        for: 10m
+        labels:
+          severity: warning
+          aspect: llmops
+        annotations:
+          summary: "LLM p95 latency above the 8s SLA"
+          description: "p95 LLM call latency is {{ $value | humanizeDuration }} (>8s, the courseware efficiency gate)."
+
+      # The chain is answering, but only by failing over. Fires on the RATIO of
+      # non-ok outcomes, so it stays quiet during a low-traffic blip and speaks up
+      # when a provider is genuinely down — the state the circuit breaker hides by
+      # design, because a tripped breaker makes the symptom (slow calls) disappear.
+      - alert: LLMProviderFailureRateHigh
+        expr: >
+          sum(rate(careroute_llm_latency_seconds_count{outcome!="ok"}[15m])) by (service)
+            /
+          clamp_min(sum(rate(careroute_llm_latency_seconds_count[15m])) by (service), 0.001) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+          aspect: llmops
+        annotations:
+          summary: "Over a quarter of LLM calls are failing or timing out"
+          description: "{{ $value | humanizePercentage }} of LLM calls ended in error/timeout over 15m."
+
+  # ── Availability: uptime, yield, harvest ───────────────────────────────────
+  # Lecture 03 ("Logging and Monitoring") teaches three availability measures and
+  # the pipeline computed none of them. They are RECORDING rules, not dashboard
+  # arithmetic: a formula that lives in a Grafana panel exists only for whoever
+  # is looking at that panel, cannot be alerted on, and is re-derived (slightly
+  # differently) by the next person who needs it.
+  #
+  # See backend/app/availability.py for what harvest counts and why a component
+  # whose INPUT was absent leaves the denominator.
+  - name: careroute-availability
+    rules:
+      # YIELD = requests served / requests received.
+      #
+      # The denominator is the whole point. `careroute_triage_requests_total`
+      # counts blocked/completed/escalated — three flavours of success — so a
+      # yield built from it alone is the constant 1.0. Received also includes the
+      # runs that FAILED (outcome="error", counted by `_counted_stream`) and the
+      # ones the service refused before doing any work: rate-limited callers and
+      # quarantined clients. Deliberate load shedding is still a yield loss —
+      # shedding is the mechanism availability work exists to measure, not an
+      # excuse to exclude.
+      #
+      # A guardrail block counts as SERVED: screening the input is the service
+      # doing its job, not failing to. So does an interview turn ("asked",
+      # 2026-09-26): answering with a clarifying question is the service working.
+      #
+      # The union form (`a or b or c`) rather than `a + b + c` is deliberate:
+      # with `+`, a counter that has never been incremented is an absent series,
+      # the vector match finds no partner, and the entire denominator evaluates
+      # to nothing — so the metric disappears exactly while the service is calm.
+      #
+      # `> 0` on the denominator, not clamp_min: with no traffic at all the ratio is
+      # undefined, and clamp_min turned 0/0 into 0 — "nothing served" — so an idle
+      # service fired LowTriageYield. Absent is the honest value (alert.rules.test.yml).
+      - record: careroute:yield:ratio5m
+        expr: >
+          sum(rate(careroute_triage_requests_total{outcome=~"completed|escalated|blocked|asked"}[5m])) by (service)
+            /
+          (
+            sum(
+              rate(careroute_triage_requests_total[5m])
+              or rate(careroute_rate_limited_total[5m])
+              or rate(careroute_abuse_events_total{kind="refused"}[5m])
+            ) by (service) > 0)
+
+      # HARVEST = how complete the served answers were, 0..1. Same `> 0`: an agent
+      # container exports this histogram but never observes it, and must not show up
+      # as a 0% harvest dragging the dashboard's min() down.
+      - record: careroute:harvest:mean5m
+        expr: >
+          sum(rate(careroute_answer_harvest_sum[5m])) by (service)
+            /
+          (sum(rate(careroute_answer_harvest_count[5m])) by (service) > 0)
+
+      # UPTIME. The lecture's (MTBF - MTTR) / MTBF is the fraction of time the
+      # service was up, estimated from two means. Prometheus already samples that
+      # fraction directly every 15s, so it is measured here rather than derived:
+      # `avg_over_time(up[30d])` is the same number without either estimate.
+      # `up` carries the `service` label from prometheus.yml's target.
+      - record: careroute:availability:ratio30d
+        expr: avg_over_time(up{job="careroute-backend"}[30d])
+
+      - alert: LowTriageYield
+        expr: careroute:yield:ratio5m < 0.95
+        for: 10m
+        labels:
+          severity: warning
+          aspect: mlops
+        annotations:
+          summary: "Triage yield below 95%"
+          description: "{{ $value | humanizePercentage }} of received triage requests are being served — check for errors or shedding."
+
+      # The alert the harvest metric exists for: yield stays perfect, every
+      # patient gets an answer, and the answers have quietly stopped carrying
+      # their citations / route / model assessment because a dependency is down.
+      # Nothing else in this file can see that — every degradation path in the
+      # app is an `except` that returns a successful response.
+      - alert: AnswersDegradedWhileYieldHealthy
+        expr: careroute:harvest:mean5m < 0.6 and careroute:yield:ratio5m > 0.95
+        for: 15m
+        labels:
+          severity: warning
+          aspect: mlops
+        annotations:
+          summary: "Triage answers are thin: harvest below 60% while yield is healthy"
+          description: "Mean harvest is {{ $value | humanizePercentage }} — cases are being served with parts of the answer missing. Check careroute_answer_components_total{state=\"degraded\"} for which part."

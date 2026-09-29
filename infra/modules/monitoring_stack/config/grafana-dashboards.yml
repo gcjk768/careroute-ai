@@ -1,0 +1,18 @@
+# [MLOps] Grafana dashboard provisioning — loads the CareRoute triage dashboard
+# JSON on boot.
+#
+# Mirrors careroute_ai_app/monitoring/grafana/provisioning/dashboards/dashboards.yml;
+# the path is /tmp because the entrypoint writes it there (see the module).
+apiVersion: 1
+
+providers:
+  - name: CareRoute
+    orgId: 1
+    folder: CareRoute
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /tmp/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,11 @@
+{
+  "venvPath": "C:/venvs",
+  "venv": "careroute",
+  "include": ["app"],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportOptionalMemberAccess": "warning",
+  "reportArgumentType": "warning",
+  "reportCallIssue": "warning",
+  "reportAttributeAccessIssue": "warning"
+}

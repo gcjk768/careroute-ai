@@ -1,0 +1,40 @@
+flowchart TD
+    subgraph SHAM["Sham Goh"]
+        direction TB
+        S1["Symptom-Intake"]
+        S2["Orchestrator<br>runs all 7 in order"]
+        S3["Per-request<br>isolation"]
+    end
+    subgraph JAMES["James Koh"]
+        direction TB
+        J1["Severity-Classifier"]
+        J2["ML model, SHAP,<br>fairness audit"]
+        J3["Agent framework,<br>A2A bus, guardrails"]
+        J4["MLOps CI/CD"]
+    end
+    subgraph AARON["Aaron Liew"]
+        direction TB
+        A1["Safety-Override"]
+        A2["Red-flag rules"]
+        A3["Safety-NLP layer<br>16 modules"]
+    end
+    subgraph MARCUS["Marcus Teh"]
+        direction TB
+        M1["Care-Routing"]
+        M2["Clinics, hours,<br>OneMap routing"]
+        M3["Routing UI"]
+    end
+    subgraph HERIZ["Heriz Yusoff"]
+        direction TB
+        H1["Human-in-the-Loop"]
+        H2["Clinician-Handoff"]
+        H3["Handoff evals"]
+    end
+
+    SHAM --> PIPE["CareRoute pipeline"]
+    JAMES --> PIPE
+    AARON --> PIPE
+    MARCUS --> PIPE
+    HERIZ --> PIPE
+
+    style PIPE fill:#e1d5e7

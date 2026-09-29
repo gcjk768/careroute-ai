@@ -1,0 +1,13 @@
+flowchart LR
+    A["Final acuity<br>after safety"] --> T["Map to care tier"]
+    T --> C["Candidate clinics<br>CHAS directory"]
+    C --> H["Filter by<br>opening hours"]
+    H --> D["OneMap<br>travel time"]
+    D --> SEL@{ icon: "mdi:map-marker-check", form: "square", label: "Pick a verified clinic", pos: "b" }
+    SEL --> OUT["Clinic + travel<br>+ alternatives"]
+    D -.->|API down| EST["Labelled local<br>estimate"]
+    SEL -.->|refuses| NEAR["Nearest<br>fallback"]
+    EST --> OUT
+    NEAR --> OUT
+    style SEL fill:#e1d5e7
+    style EST fill:#fff2cc

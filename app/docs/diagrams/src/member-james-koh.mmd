@@ -1,0 +1,13 @@
+flowchart LR
+    S@{ icon: "mdi:text-search", form: "square", label: "Clean sentence", pos: "b" } --> FE["Feature extraction"]
+    FE --> RF@{ icon: "mdi:brain", form: "square", label: "RandomForest", pos: "b" }
+    RF --> OUT["Acuity P1 to P5<br>+ confidence"]
+    FE -.->|if model fails| LLM["LLM reasoning"]
+    LLM -.->|if that fails| KW["Keyword rules"]
+    RF --> SHAP["SHAP<br>why this answer"]
+    S --> RAG["RAG retrieval<br>guidance citations"]
+    OUT --> A["acuity.classified"]
+    SHAP --> A
+    RAG --> A
+    style RF fill:#d5e8d4
+    style SHAP fill:#fff2cc

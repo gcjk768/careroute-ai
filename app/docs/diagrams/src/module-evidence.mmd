@@ -1,0 +1,35 @@
+flowchart LR
+    subgraph XRAI["Responsible AI"]
+        X1["Real SHAP<br>explanations"]
+        X2["Fairness audit<br>gap, parity, TPR"]
+        X3["Counterfactual:<br>sex flip rate 0.0"]
+        X4["Model Card,<br>PDPC governance"]
+    end
+    subgraph SEC["AI + Cybersecurity"]
+        S1["6-layer guardrail + de-obfuscation<br>PyRIT bypass 6.1%"]
+        S2["PII redaction<br>before any AI call"]
+        S3["Tamper-evident<br>audit log"]
+        S4["30+ CI scanners<br>OWASP LLM Top 10"]
+    end
+    subgraph AG["Architecting Agentic AI"]
+        G1["7 agents,<br>safety-gated"]
+        G2["Typed A2A<br>message bus"]
+        G3["Tool allow-lists"]
+        G4["Reflection critic<br>bounded loop"]
+    end
+    subgraph OPS["Deploying - MLSecOps"]
+        O1["10-stage CI/CD"]
+        O2["Blocking quality<br>+ fairness gates"]
+        O3["MLflow + DVC"]
+        O4["Drift to<br>retrain loop"]
+    end
+
+    XRAI --> EV["ASPECTS.md maps<br>every requirement<br>to its code"]
+    SEC --> EV
+    AG --> EV
+    OPS --> EV
+
+    style EV fill:#fff2cc
+
+    XRAI ~~~ AG
+    SEC ~~~ OPS

@@ -1,0 +1,35 @@
+flowchart LR
+    subgraph PUB["Each agent PUBLISHES"]
+        direction TB
+        P1["Symptom-Intake<br>symptoms.normalised"]
+        P2["Severity-Classifier<br>acuity.classified"]
+        P3["Safety-Override<br>safety.override"]
+        P4["Care-Routing<br>care.routed"]
+        P5["Human-in-the-Loop<br>review.decision"]
+        P6["Clinician-Handoff<br>handoff.ready"]
+        P7["Reflection<br>decision.reviewed"]
+    end
+    BUS{{"MessageBus<br>typed and ordered<br>all of it audited"}}
+    subgraph SUB["Each agent RECEIVES"]
+        direction TB
+        R1["Severity-Classifier<br>symptoms.normalised"]
+        R2["Safety-Override<br>acuity.classified<br>safety.assessment"]
+        R3["Care-Routing<br>acuity.classified<br>safety.override"]
+        R4["Human-in-the-Loop<br>acuity.classified<br>safety.override<br>care.routed"]
+        R5["Clinician-Handoff<br>safety.override<br>care.routed"]
+        R6["Reflection<br>safety.override<br>care.routed<br>review.decision"]
+    end
+    P1 --> BUS
+    P2 --> BUS
+    P3 --> BUS
+    P4 --> BUS
+    P5 --> BUS
+    P6 --> BUS
+    P7 --> BUS
+    BUS --> R1
+    BUS --> R2
+    BUS --> R3
+    BUS --> R4
+    BUS --> R5
+    BUS --> R6
+    style BUS fill:#e1d5e7

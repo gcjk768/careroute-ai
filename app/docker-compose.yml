@@ -1,0 +1,407 @@
+# kics-scan disable=698ed579-b239-4f8f-a388-baa4bcb13ef8,8c978947-0ff6-485c-b0c2-0bfca6026466
+# KICS exclusions for THIS file (accepted, not fixed):
+#  698ed579 "Healthcheck Not Set": every CareRoute image bakes a HEALTHCHECK in
+#    its Dockerfile (Compose inherits it; depends_on service_healthy relies on
+#    it); ml-jobs are run-to-completion (HEALTHCHECK NONE); prometheus/
+#    alertmanager/grafana are local-only observability, nothing waits on them.
+#  8c978947 "Shared Volumes Between Containers": `telemetry` is shared BY DESIGN
+#    (classifier/gateway write the inference + ground-truth logs, the jobs read
+#    them); the other named volumes each belong to one service.
+# CareRoute as microservices: one agent, one container, all on one machine.
+# Run:  docker compose up --build        then open http://localhost:8080
+#
+# The intake-gateway (network alias `backend`, so the frontend and Prometheus
+# configs are unchanged) is the only backend port published; every agent is
+# reachable only on this Compose network. OPENAI_API_KEY reaches ONE container,
+# llm-gateway. Without a key every agent runs its deterministic fallback.
+# Scheduled jobs:  docker compose --profile jobs run --rm batch-scorer
+#                  docker compose --profile jobs run --rm drift-monitor
+# Spec: docs/design/specs/2026-09-19-agent-microservices-design.md
+
+# Every container: no setuid privilege escalation and no Linux capabilities (all
+# images run as a non-root user on ports >1024, so none are needed).
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+x-agent: &agent
+  <<: *hardening
+  restart: unless-stopped
+  depends_on:
+    llm-gateway: {condition: service_healthy}
+    rag-service: {condition: service_healthy}
+  deploy:
+    resources:
+      limits: {cpus: "0.5", memory: 384M}
+
+x-agent-env: &agent-env
+  CAREROUTE_LLM_GATEWAY_URL: http://llm-gateway:8107
+  CAREROUTE_RAG_SERVICE_URL: http://rag-service:8108
+  # KICS "Generic Token" accepted on the three token lines: `local-dev-token` is a
+  # published LOCAL-ONLY placeholder, not a credential (agent ports are never
+  # published; ECS injects the real token from Secrets Manager). Kept rather than
+  # blanked because an empty token turns the inter-agent auth check OFF.
+  # kics-scan ignore-line
+  CAREROUTE_INTERNAL_TOKEN: ${CAREROUTE_INTERNAL_TOKEN:-local-dev-token}
+
+services:
+  redis:
+    <<: *hardening
+    image: redis:7.4.1-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    # Start as `redis` so the entrypoint skips its root chown of /data: as root
+    # with every capability dropped it cannot enter the 0700 appendonlydir it
+    # wrote on the first run, so every later `up` failed. No cap_add needed.
+    user: redis
+    volumes: [redis-data:/data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 256M}
+
+  llm-gateway:
+    <<: *hardening
+    build: {context: ./backend, target: llm-gateway}
+    image: careroute-llm-gateway:${IMAGE_TAG:-local}
+    environment:
+      LLM_PROVIDER_ORDER: ${LLM_PROVIDER_ORDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # Model by task weight (backend/app/llm.py ROUTES): fast / deep / escalated-hard.
+      OPENAI_MODEL_FAST: ${OPENAI_MODEL_FAST:-gpt-5.4-mini}
+      OPENAI_MODEL_DEEP: ${OPENAI_MODEL_DEEP:-gpt-5.4}
+      OPENAI_MODEL_MAX: ${OPENAI_MODEL_MAX:-gpt-5.5}
+      OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-low}
+      # kics-scan ignore-line
+      CAREROUTE_INTERNAL_TOKEN: ${CAREROUTE_INTERNAL_TOKEN:-local-dev-token}
+      # Per-case LLM tracing (backend/app/tracing.py); off while the keys are empty.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-careroute}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  rag-service:
+    <<: *hardening
+    build: {context: ./backend, target: rag-service}
+    image: careroute-rag-service:${IMAGE_TAG:-local}
+    environment:
+      # kics-scan ignore-line
+      CAREROUTE_INTERNAL_TOKEN: ${CAREROUTE_INTERNAL_TOKEN:-local-dev-token}
+      ONYX_BASE_URL: ${ONYX_BASE_URL:-}
+      ONYX_API_KEY: ${ONYX_API_KEY:-}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1024M}
+
+  classifier-agent:
+    <<: *agent
+    build: {context: ./backend, target: classifier-agent}
+    image: careroute-classifier-agent:${IMAGE_TAG:-local}
+    environment:
+      <<: *agent-env
+      CAREROUTE_INFERENCE_LOG: /app/telemetry/inference_log.jsonl
+    volumes: [telemetry:/app/telemetry]
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  safety-agent:
+    <<: *agent
+    build: {context: ./backend, target: safety-agent}
+    image: careroute-safety-agent:${IMAGE_TAG:-local}
+    environment: *agent-env
+
+  routing-agent:
+    <<: *agent
+    build: {context: ./backend, target: routing-agent}
+    image: careroute-routing-agent:${IMAGE_TAG:-local}
+    environment:
+      <<: *agent-env
+      ONEMAP_EMAIL: ${ONEMAP_EMAIL:-}
+      ONEMAP_PASSWORD: ${ONEMAP_PASSWORD:-}
+
+  reflection-agent:
+    <<: *agent
+    build: {context: ./backend, target: reflection-agent}
+    image: careroute-reflection-agent:${IMAGE_TAG:-local}
+    environment: *agent-env
+
+  hitl-agent:
+    <<: *agent
+    build: {context: ./backend, target: hitl-agent}
+    image: careroute-hitl-agent:${IMAGE_TAG:-local}
+    environment: *agent-env
+
+  handoff-agent:
+    <<: *agent
+    build: {context: ./backend, target: handoff-agent}
+    image: careroute-handoff-agent:${IMAGE_TAG:-local}
+    environment: *agent-env
+
+  intake-gateway:
+    <<: *hardening
+    build: {context: ./backend, target: intake-gateway}
+    image: careroute-intake-gateway:${IMAGE_TAG:-local}
+    networks:
+      default:
+        aliases: [backend]
+    # KICS "Not Bound To Host Interface" accepted: test:compose-smoke reaches this
+    # port from ANOTHER container (http://docker:8000), so loopback would break it.
+    # kics-scan ignore-line
+    ports: ["8000:8000"]
+    environment:
+      <<: *agent-env
+      AGENT_TRANSPORT: http
+      CAREROUTE_AGENT_URL_CLASSIFIER: http://classifier-agent:8101
+      CAREROUTE_AGENT_URL_SAFETY: http://safety-agent:8102
+      CAREROUTE_AGENT_URL_ROUTING: http://routing-agent:8103
+      CAREROUTE_AGENT_URL_REFLECTION: http://reflection-agent:8104
+      CAREROUTE_AGENT_URL_HITL: http://hitl-agent:8105
+      CAREROUTE_AGENT_URL_HANDOFF: http://handoff-agent:8106
+      CAREROUTE_REDIS_URL: redis://redis:6379/0
+      CAREROUTE_GROUND_TRUTH_LOG: /app/telemetry/ground_truth.jsonl
+      # [AI-Security] Shared key for the staff endpoints; set the same on `frontend`.
+      CAREROUTE_STAFF_API_KEY: ${CAREROUTE_STAFF_API_KEY:-}
+      # Per-case LLM tracing (backend/app/tracing.py); off while the keys are empty.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-careroute}
+    volumes: [telemetry:/app/telemetry]
+    depends_on:
+      redis: {condition: service_healthy}
+      classifier-agent: {condition: service_healthy}
+      safety-agent: {condition: service_healthy}
+      routing-agent: {condition: service_healthy}
+      reflection-agent: {condition: service_healthy}
+      hitl-agent: {condition: service_healthy}
+      handoff-agent: {condition: service_healthy}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  frontend:
+    <<: *hardening
+    # BACKEND_URL is a BUILD ARG (Next bakes rewrites() at `next build`) AND a
+    # runtime env var (the staff proxy Route Handler reads it per request).
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    image: careroute-frontend:${IMAGE_TAG:-local}
+    ports: ["127.0.0.1:8080:3000"]
+    environment:
+      BACKEND_URL: http://backend:8000
+      CAREROUTE_STAFF_API_KEY: ${CAREROUTE_STAFF_API_KEY:-}
+    depends_on:
+      intake-gateway: {condition: service_healthy}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  batch-scorer:
+    <<: *hardening
+    profiles: [jobs]
+    build: {context: ./backend, target: ml-jobs}
+    image: careroute-ml-jobs:${IMAGE_TAG:-local}
+    environment:
+      CAREROUTE_REDIS_URL: redis://redis:6379/0
+      CAREROUTE_INFERENCE_LOG: /app/telemetry/inference_log.jsonl
+      CAREROUTE_GROUND_TRUTH_LOG: /app/telemetry/ground_truth.jsonl
+    volumes: [telemetry:/app/telemetry]
+    depends_on:
+      redis: {condition: service_healthy}
+
+  drift-monitor:
+    <<: *hardening
+    profiles: [jobs]
+    image: careroute-ml-jobs:${IMAGE_TAG:-local}
+    command: ["python", "-m", "app.ml.monitor"]
+    environment:
+      CAREROUTE_MONITOR_SOURCE: live
+      CAREROUTE_MONITOR_DIR: /app/telemetry/monitoring
+      CAREROUTE_INFERENCE_LOG: /app/telemetry/inference_log.jsonl
+      CAREROUTE_GROUND_TRUTH_LOG: /app/telemetry/ground_truth.jsonl
+    volumes: [telemetry:/app/telemetry]
+
+  prometheus:
+    <<: *hardening
+    image: prom/prometheus:v2.55.1
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      intake-gateway: {condition: service_healthy}
+      alertmanager: {condition: service_started}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+  alertmanager:
+    <<: *hardening
+    image: prom/alertmanager:v0.27.0
+    ports: ["127.0.0.1:9093:9093"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 256M}
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:11.3.1
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      # KICS "Generic Password" accepted: a local-dev default, reachable on
+      # loopback only (ports above); set GRAFANA_PASSWORD for anything shared.
+      # kics-scan ignore-line
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-careroute-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus: {condition: service_started}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+  # ── Optional: self-hosted Langfuse (per-case LLM traces) ────────────────────
+  #   docker compose --profile tracing up
+  # Langfuse v4 needs ClickHouse >= 25.12 (26.4 recommended).
+  # UI http://localhost:3001 (admin@careroute.local / careroute-local). The
+  # headless init below creates the project and its API keys, so the backend
+  # only needs, in the repo-root .env:
+  #   LANGFUSE_PUBLIC_KEY=pk-lf-careroute-local
+  #   LANGFUSE_SECRET_KEY=sk-lf-careroute-local
+  # Every secret here is a LOCAL-ONLY placeholder bound to loopback, not a credential.
+  langfuse-web:
+    image: langfuse/langfuse:4
+    profiles: [tracing]
+    ports: ["127.0.0.1:3001:3000"]
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: careroute-local-nextauth
+      SALT: careroute-local-salt
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_INIT_ORG_ID: careroute
+      LANGFUSE_INIT_ORG_NAME: CareRoute
+      LANGFUSE_INIT_PROJECT_ID: careroute
+      LANGFUSE_INIT_PROJECT_NAME: careroute
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-careroute-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-careroute-local
+      LANGFUSE_INIT_USER_EMAIL: admin@careroute.local
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: careroute-local
+    depends_on:
+      langfuse-postgres: {condition: service_healthy}
+      langfuse-clickhouse: {condition: service_healthy}
+      langfuse-redis: {condition: service_healthy}
+      langfuse-minio: {condition: service_started}
+    restart: unless-stopped
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4
+    profiles: [tracing]
+    environment: *langfuse-env
+    depends_on:
+      langfuse-postgres: {condition: service_healthy}
+      langfuse-clickhouse: {condition: service_healthy}
+      langfuse-redis: {condition: service_healthy}
+      langfuse-minio: {condition: service_started}
+    restart: unless-stopped
+
+  langfuse-postgres:
+    image: postgres:17
+    profiles: [tracing]
+    environment: {POSTGRES_USER: langfuse, POSTGRES_PASSWORD: langfuse, POSTGRES_DB: langfuse}
+    volumes: [langfuse-postgres:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U langfuse"], interval: 5s, timeout: 3s, retries: 10}
+    restart: unless-stopped
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:26.4
+    profiles: [tracing]
+    user: "101:101"
+    environment: {CLICKHOUSE_DB: default, CLICKHOUSE_USER: clickhouse, CLICKHOUSE_PASSWORD: clickhouse}
+    volumes: [langfuse-clickhouse:/var/lib/clickhouse]
+    healthcheck: {test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"], interval: 5s, timeout: 5s, retries: 10}
+    restart: unless-stopped
+
+  langfuse-redis:
+    image: redis:7
+    profiles: [tracing]
+    command: ["redis-server", "--requirepass", "langfuse", "--maxmemory-policy", "noeviction"]
+    healthcheck: {test: ["CMD", "redis-cli", "-a", "langfuse", "ping"], interval: 5s, timeout: 3s, retries: 10}
+    restart: unless-stopped
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    profiles: [tracing]
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" /data'
+    environment: {MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: miniosecret}
+    volumes: [langfuse-minio:/data]
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  telemetry:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  langfuse-postgres:
+  langfuse-clickhouse:
+  langfuse-minio:

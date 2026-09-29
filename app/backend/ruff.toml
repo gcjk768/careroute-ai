@@ -1,0 +1,71 @@
+# Ruff configuration for the CareRoute backend.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# `.gitlab-ci.yml` runs `ruff check backend/app` as a BLOCKING gate. Without a
+# config, ruff applies its own default rule set — which grows with every ruff
+# release. An unpinned `pip install ruff` therefore turns a green pipeline red
+# on someone else's release schedule, with no change to this repository.
+#
+# Selecting the rule set explicitly makes the gate deterministic: upgrading ruff
+# becomes a deliberate change to this file, reviewed like any other.
+
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E4", "E7", "E9",  # pycodestyle — the error subset ruff enables by default
+    "F",               # pyflakes: undefined names, unused imports, redefinitions
+    "I",               # import sorting
+    "UP",              # pyupgrade — keep syntax current with target-version
+    "B",               # bugbear — likely bugs
+    "C4",              # comprehension clarity
+    "DTZ",             # naive datetimes (this system reasons about clinic hours)
+    "ISC",             # implicit string concat — catches a missing comma in a list
+    "PIE", "PERF",     # dead code and obvious inefficiency
+    "RUF",             # ruff's own rules (incl. mutable class attributes)
+    "S",               # bandit security rules
+    "BLE",             # blind excepts — see the note on BLE001 below
+    "SIM", "TRY",      # simplification and exception-handling hygiene
+    "FURB", "PLE",     # modernisation and pylint errors
+]
+
+ignore = [
+    # TRY003 ("avoid long messages outside the exception class") would require
+    # replacing ~88 descriptive raise sites with custom exception classes. The
+    # messages are the diagnostic value here; the rule is style, not safety.
+    "TRY003",
+
+    # TRY300 ("move the return into an else block") and TRY301 ("abstract the
+    # raise into an inner function") are contested style rules. In this codebase
+    # both make the safety-critical paths harder to read: the guarded happy-path
+    # return reads better inline, and hoisting a raise into a helper hides the
+    # condition that triggered it from the reader of the try block.
+    "TRY300", "TRY301",
+
+    # RUF001/RUF003 flag "ambiguous" Unicode. The hits are en dashes and curly
+    # apostrophes in PATIENT-FACING clinical copy and its comments, where the
+    # typography is deliberate. ASCII-fying them would degrade the UI text.
+    "RUF001", "RUF003",
+
+    # SIM108 would collapse a two-branch SHAP shape check into a ~110-character
+    # ternary, and PERF401 rewrites three PDF report-builder loops into
+    # `list.extend`. Both trade readability for no measurable gain in a
+    # non-hot path.
+    "SIM108", "PERF401",
+]
+
+# BLE001 (blind `except Exception`) is ENFORCED, not ignored.
+#
+# CareRoute's safety design requires that a failure of an LLM, provider, parser,
+# map service or optional ML dependency degrades to a deterministic, auditable
+# fallback rather than propagating — SECURITY.md states this as the LLM09
+# Overreliance control ("activates on ANY LLM failure"). Narrowing those
+# handlers to enumerated types would reintroduce the exact failure mode the
+# design prevents.
+#
+# So each intentional site carries `# noqa: BLE001 - <reason>` instead. That
+# keeps the rule live: a NEW blind except added by accident still fails the
+# gate, and every existing one has to justify itself in the diff. Silent `pass`
+# bodies were removed separately, so each now logs or records a metric.

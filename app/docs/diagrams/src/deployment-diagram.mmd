@@ -1,0 +1,64 @@
+flowchart LR
+  subgraph CLIENT["«device» Patient or clinician browser"]
+    UI["«artifact» Next.js pages<br/>React 18 · SSE client"]
+  end
+
+  subgraph HOST["«device» Docker host — one VM or laptop (docker compose · AGENT_TRANSPORT=http)"]
+    subgraph FE["«execution environment» frontend container<br/>node:20-alpine · :3000 → host 8080"]
+      NEXT["«artifact» Next standalone server<br/>/api rewrite · staff login + staff-key proxy"]
+    end
+    subgraph GW["«execution environment» intake-gateway · :8000 (the only published backend port)"]
+      API["«artifact» FastAPI + uvicorn<br/>rate limit · guardrail · redaction · red-flag rules"]
+      ORCH["«component» Symptom-Intake + orchestrator<br/>MessageBus · hash-chained audit · SSE"]
+    end
+    subgraph AGENTS["«execution environment» one container per agent · POST /v1/invoke"]
+      CLS["classifier-agent :8101<br/>RF model .joblib (baked in, release-gated)"]
+      SAF["safety-agent :8102<br/>rules + semantic layer"]
+      RTE["routing-agent :8103<br/>clinics · hours · OneMap"]
+      REF["reflection-agent :8104"]
+      HITL["hitl-agent :8105"]
+      HND["handoff-agent :8106"]
+    end
+    subgraph SHARED["«execution environment» shared services"]
+      LLMG["llm-gateway :8107<br/>the only holder of the provider key"]
+      RAGS["rag-service :8108<br/>corpus index + local embedder"]
+      REDIS["redis :6379<br/>cases · escalations · audit — write-through"]
+    end
+    subgraph OBS["«execution environment» observability containers"]
+      PROM["Prometheus :9090"]
+      AM["Alertmanager :9093"]
+      GRAF["Grafana :3000"]
+    end
+    subgraph JOBS["«execution environment» scheduled ML jobs"]
+      BATCH["batch-scorer (nightly)"]
+      DRIFT["drift-monitor (daily)"]
+    end
+  end
+
+  subgraph EXT["«external» optional network services"]
+    LLM["LLM provider<br/>OpenAI API"]
+    MAP["OneMap routing API"]
+    DIR["CHAS directory · GoWhere hours<br/>(snapshotted in the image)"]
+  end
+
+  UI -- "HTTPS · text/event-stream" --> NEXT
+  NEXT -- "HTTP :8000" --> API
+  API --> ORCH
+  ORCH -- "HTTP /v1/invoke · lane + COMMS checks · breaker" --> CLS
+  ORCH --> SAF
+  ORCH --> RTE
+  ORCH --> REF
+  ORCH --> HITL
+  ORCH --> HND
+  ORCH -. "llm.complete" .-> LLMG
+  CLS -. "llm.complete" .-> LLMG
+  HND -. "llm.complete" .-> LLMG
+  CLS -. "rag.retrieve" .-> RAGS
+  HND -. "rag.retrieve" .-> RAGS
+  ORCH -- "best-effort writes" --> REDIS
+  LLMG -. "HTTPS, timeout + breaker" .-> LLM
+  RTE -. "HTTPS, cached 5 min" .-> MAP
+  RTE -. "read-only" .-> DIR
+  PROM -- "scrape /metrics 15 s" --> API
+  PROM --> AM
+  GRAF --> PROM

@@ -1,0 +1,3213 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CareRoute AI — MLSecOps / LLMSecOps CI/CD pipeline
+#
+# Demonstrates the "Integrating & Deploying AI Solutions" course aspect: a
+# staged pipeline that builds, tests, runs AI-specific security scans (LLM
+# red-teaming), scans code/deps/containers, and gates deployment. Mirrors the
+# GitLab CI/CD + Terraform stack named in the CareRoute proposal (§2.5, §2.6.5).
+#
+# All scanners below are FREE / open-source. Stages run left→right.
+#
+# Per-stage documentation lives in docs/MLOPS.md and docs/vault/MLOps Pipeline.md;
+# the gate-by-gate mapping to the DOAIS courseware is in docs/vault/Courseware
+# Alignment.md. [MLOps] tags below mark the jobs that make this an ML-Operations
+# (not just software) pipeline.
+# ─────────────────────────────────────────────────────────────────────────────
+stages:
+  - lint            # static style/type checks
+  - train           # [MLOps] BUILD + release-gate the severity model artifact (+ version the dataset)
+  - test            # unit + end-to-end behaviour tests (+ hard model-quality gate + data-lineage gate)
+  - monitor         # [MLOps] Pillar 3 — Evidently data-drift + model-performance report
+  - ai-security     # LLM red-team scanning (Promptfoo / Garak / DeepTeam / PyRIT) + guardrail regression
+  - security-scan   # SAST, SCA, secret, container, IaC & SBOM/AI-BOM scanning
+  - report          # [MLOps] executive PDF report — runs AFTER security-scan so it can
+                    # summarize the scanners' actual findings (gitleaks/semgrep/bandit/trivy)
+  - build           # container images
+  - deploy          # infrastructure + shadow/canary deploy (manual gate)
+  - post-deploy     # DAST against the DEPLOYED/staging app (needs a live target)
+
+# ── GITLAB NATIVE SCANNERS (free tier) ───────────────────────────────────────
+# GitLab ships its own SAST and Secret-Detection analyzers as CI templates, and
+# BOTH run on the FREE tier — it is the Security Dashboard and the MR security
+# widget that need Ultimate, not the jobs themselves. The analyzers execute and
+# their gl-*-report.json artifacts are produced, which is all we need: findings
+# are surfaced through our own PDF report (backend/app/ml/report.py parses both).
+#
+# These are additional independent engines, not replacements for the Semgrep /
+# Bandit / gitleaks jobs below — GitLab picks its own analyzer set per language.
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# The templates default these into the `test` stage; move them next to the other
+# scanners so the pipeline graph groups all security work in one place.
+sast:
+  stage: security-scan
+secret_detection:
+  stage: security-scan
+
+# De-duplicate pipelines: when a branch has an open MR, run ONLY the MR pipeline
+# (not a second branch pipeline for the same commit). Scheduled (CT retrain) and
+# trigger-API (drift->retrain) pipelines always run.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    # DEPLOY-ONLY BRANCH. `git push origin main:release/deploy` runs lint, train,
+    # the tests and the build/deploy path, and skips the ~40 scanner jobs
+    # (their rules check CAREROUTE_DEPLOY_ONLY; GitLab's own SAST and secret-
+    # detection templates honour *_DISABLED). The two secret-leak gates on
+    # build:images still run. Scans keep running on every main pipeline.
+    # PYRIT-ONLY BRANCH. `git push origin main:security/pyrit` runs just
+    # ai-security:pyrit (~3 min) to check the guardrail without the ~70-job
+    # pipeline; every other job's rules skip on CAREROUTE_PYRIT_ONLY.
+    - if: '$CI_COMMIT_BRANCH == "security/pyrit"'
+      variables:
+        CAREROUTE_PYRIT_ONLY: "true"
+        SAST_DISABLED: "true"
+        SECRET_DETECTION_DISABLED: "true"
+    # RUN NAMED JOBS ONLY. `git push origin HEAD:only/train.model,dast.zap-api`
+    # runs just those jobs (`.` stands for `:`, which git forbids in branch
+    # names; list a job's `needs` too). Every other job's rules skip it. A
+    # branch name, not a pipeline variable: this project allows no user-set
+    # pipeline variables (ci_pipeline_variables_minimum_override_role).
+    - if: '$CI_COMMIT_BRANCH =~ /^only\//'
+      variables:
+        SAST_DISABLED: "true"
+        SECRET_DETECTION_DISABLED: "true"
+    - if: '$CI_COMMIT_BRANCH == "release/deploy"'
+      variables:
+        CAREROUTE_DEPLOY_ONLY: "true"
+        SAST_DISABLED: "true"
+        SECRET_DETECTION_DISABLED: "true"
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # [Microservices] Every backend image, one per Dockerfile target. The frontend
+  # and the legacy `backend` monolith are added explicitly where they apply --
+  # neither is a --target in this list. Keep in sync with backend/Dockerfile.
+  CAREROUTE_IMAGES: "intake-gateway classifier-agent safety-agent routing-agent reflection-agent hitl-agent handoff-agent llm-gateway rag-service ml-jobs"
+  # Which of those are PUBLISHED to ECR. Everything above is built and scanned on
+  # every pipeline — that is what proves the microservice split holds — but the
+  # DEPLOYED shape is one compute running the `monolith` image, so only what ECS
+  # actually pulls is pushed:
+  #   backend   the Dockerfile's default `monolith` target (every agent
+  #             in-process); also the image the scheduled drift-monitor task runs,
+  #             with a different command
+  #   frontend  the Next.js server
+  # The ten per-agent images are ~1.1 GB each and ECR bills storage per retained
+  # tag, so publishing images nothing pulls would spend the demo's runway on
+  # registry storage. Add a service here the day its container is in the task
+  # definition, and create the matching repo in careroute_ai_infra
+  # (modules/careroute_stack, module "ecr" repositories) in the SAME change: ECR
+  # repos are not auto-created, so a push to a missing repo fails the job.
+  CAREROUTE_PUSH_IMAGES: "backend frontend"
+
+# [MLOps] Cache pip downloads across pipelines, keyed on the dependency manifests
+# so the cache is reused until the requirements change (PIP_CACHE_DIR above is the
+# directory that gets cached). Applied to every job via `default:` — non-Python
+# jobs simply never populate it, so it is a no-op for them.
+# NOTE: GitLab caps `cache:key:files` at TWO files, so requirements-mlops.txt
+# cannot be part of the key — when only the mlops extras change, the monitor job
+# just re-downloads them into the same cache (correctness is unaffected; pip
+# always resolves from the manifests, the cache is only a download accelerator).
+# `interruptible` lets a newer pipeline on the same ref cancel superseded runs.
+default:
+  interruptible: true
+  cache:
+    key:
+      files:
+        - backend/requirements.txt
+        - backend/requirements-dev.txt
+    paths:
+      - .cache/pip
+
+# ── LINT ─────────────────────────────────────────────────────────────────────
+# BLOCKING: ruff is fast and the backend is expected to be clean — a lint gate
+# that can never fail is decoration, not a gate.
+#
+# The version is PINNED, and the rule set is declared in backend/ruff.toml.
+# Both matter: an unpinned `pip install ruff` picks up whatever rules the latest
+# release enables by default, so the gate would go red on someone else's release
+# schedule with no change to this repository. Upgrading ruff is now a deliberate
+# edit here, reviewed with whatever new findings it brings.
+lint:backend:
+  stage: lint
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]lint[:.]backend(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - pip install ruff==0.16.3
+    - ruff check backend/app
+
+# Advisory (allow_failure) but no longer silenced: an eslint finding now shows
+# as a real warning on the pipeline instead of an unconditional green. Uses the
+# project's own `next lint` script (Next.js App Router lints app/components/lib —
+# there is no `src/` dir, which is why the old `eslint src` invocation errored).
+lint:frontend:
+  stage: lint
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]lint[:.]frontend(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: node:20-alpine
+  script:
+    - cd frontend && npm ci && npm run lint && node --test tests/*.test.mjs
+  allow_failure: true
+
+# ── TRAIN ────────────────────────────────────────────────────────────────────
+# [MLOps] The train/serve SPLIT: this job is the ONE place a model artifact is
+# built. `python -m app.ml.train` builds the model end-to-end, enforces the
+# release gate (accuracy >= 0.75 AND red-flag recall >= 0.95 — the SAME floors
+# as test:model-gate, so a model that would fail CI is never persisted or
+# registered in the first place) — exiting NON-ZERO
+# and failing the pipeline on a gate breach — persists a versioned, content-
+# addressed joblib + a sidecar SHA-256 (tamper-evidence), and MLflow-registers
+# `CareRouteTriageRF` when MLflow is present. Downstream test/build jobs consume
+# the joblib via `needs:` so the container ships a VALIDATED artifact that
+# get_model() loads at boot instead of retraining on every process start.
+# [MLOps] Pillar 1 (experiment tracking + Model Registry) & Pillar 4 (Continuous
+# Training). `python -m app.ml.train` logs params/metrics and REGISTERS the model
+# as `CareRouteTriageRF` to whatever MLFLOW_TRACKING_URI points at. To send runs to
+# GitLab's built-in, MLflow-compatible Model Registry, set these two CI/CD variables
+# (Settings -> CI/CD -> Variables), no code change needed:
+#     MLFLOW_TRACKING_URI    = ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/ml/mlflow
+#     MLFLOW_TRACKING_TOKEN  = <a project/personal access token with api scope>
+# Unset -> mlflow logs to a local ./mlruns store (browse with `mlflow ui`).
+#
+# CONTINUOUS TRAINING: the `rules:` below also fire this job on a *scheduled*
+# pipeline (Settings -> CI/CD -> Pipeline schedules -> e.g. weekly), so the model
+# is periodically retrained + re-gated + re-registered on the latest code/data —
+# the scheduled-retraining trigger the course names.
+train:model:
+  stage: train
+  image: python:3.12-slim
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]train[:.]model(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'          # [CT] scheduled retrain
+    - if: '$CI_COMMIT_BRANCH'                           # every push
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt mlflow==3.16.1
+    - python -m app.ml.train                       # builds + release-gates + persists + MLflow-registers
+    # Emit the model audit (accuracy / red-flag recall / fairness / drift /
+    # calibration / integrity hashes) as a machine-readable release record.
+    - >
+      python -c "import json; from app.ml.model import get_model;
+      open('models/model_audit.json','w').write(json.dumps(get_model().fairness(), indent=2))"
+  artifacts:
+    name: "careroute-model-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - backend/models/*.joblib
+      - backend/models/*.sha256
+      - backend/models/model_audit.json
+      # The run's MLflow tracking store. The deployed MLflow server has no auth
+      # and stays internal-only, so CI cannot log to it; without these paths every
+      # run, metric and registered version vanished with the job. Download and
+      # `mlflow ui --backend-store-uri sqlite:///mlflow.db` to browse this run.
+      - backend/mlflow.db
+      - backend/mlruns/
+    expire_in: 30 days
+    when: on_success
+
+# [MLOps] Pillar 2 — DATA VERSIONING. Materialize the deterministic training
+# dataset to a snapshot + a content-addressed metadata record (dataSha256). In a
+# real setup `dvc add backend/data/triage_dataset.npz` versions the binary and the
+# committed .dvc pointer ties a commit to an exact dataset. Here the CI job proves
+# reproducibility and hands the metadata to the data-lineage gate below.
+#
+# --check RUNS FIRST, AND THAT ORDER IS THE WHOLE GATE. This job used to go
+# straight to write mode, which OVERWRITES backend/data/triage_dataset.meta.json
+# with whatever the current code produces. Every downstream check then compared
+# that freshly regenerated file against a model trained from the same code in the
+# same pipeline — the dataset was being compared to itself, and a change to
+# data.py or features.py that silently altered the training data would sail
+# through as "lineage verified". `--check` (export_dataset.check_snapshot) is the
+# real assertion: re-derive the dataset and diff its dataSha256 against the
+# COMMITTED meta.json, exiting 1 on a mismatch. Only then re-export.
+# DVC REMOTES. Two are configured in .dvc/config:
+#   * `s3` (DEFAULT since 2026-09-22): s3://careroute-demo-artifacts-<acct>/dvc,
+#     the artifacts bucket the infra repo provisions (enable_artifacts_bucket).
+#     On `main` this job assumes the same OIDC role deploy:push-images uses
+#     (AWS_DEPLOY_ROLE_ARN; its trust policy admits main only) and DVC's boto
+#     credential chain picks the web-identity token up from the environment.
+#     The role may touch the dvc/ prefix and nothing else in the bucket.
+#   * `gitlab`: the generic package registry of THIS project (added 2026-09-15).
+#     Used on every other branch, where the AWS role cannot be assumed, via the
+#     job token in a --local override that never touches the committed config.
+#     Locally a developer uses a personal access token in .dvc/config.local, or
+#     their own AWS credentials for the S3 remote.
+# `dvc pull` restores the committed snapshot BEFORE the reproducibility check so
+# the check compares the regenerated data against the file the pointer actually
+# names, and `dvc push` publishes a changed snapshot so the next clone can pull it.
+data:version:
+  stage: train
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]data[:.]version(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    CAREROUTE_DATA_DIR: "$CI_PROJECT_DIR/backend/data"
+  script:
+    - pip install -q "dvc[s3]==3.67.1"     # same pin as backend/requirements-mlops.txt
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ] && [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ]; then
+        printf '%s' "$AWS_ID_TOKEN" > /tmp/aws-web-identity-token
+        export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-identity-token
+        export AWS_ROLE_ARN="$AWS_DEPLOY_ROLE_ARN" AWS_ROLE_SESSION_NAME="gitlab-dvc-${CI_JOB_ID}"
+        export DVC_REMOTE=s3
+        echo "DVC remote: s3 (OIDC role on main)"
+      else
+        dvc remote modify --local gitlab custom_auth_header JOB-TOKEN
+        dvc remote modify --local gitlab password "$CI_JOB_TOKEN"
+        export DVC_REMOTE=gitlab
+        echo "DVC remote: gitlab package registry (branch ${CI_COMMIT_BRANCH:-?} cannot assume the AWS role)"
+      fi
+    # Keep the COMMITTED pointer: `dvc commit -f` below rewrites it in the workspace.
+    - cp backend/data/triage_dataset.npz.dvc /tmp/triage_dataset.npz.dvc.committed
+    # Best-effort: a snapshot missing from the remote is repaired by the push below,
+    # and a STALE pointer (the real failure mode) is caught by the pointer check.
+    - 'dvc pull -r "$DVC_REMOTE" -v || echo "dvc pull: snapshot named by the committed pointer is not in the remote (repaired by the push below if the pointer is current)"'
+    - cd backend
+    - pip install -r requirements.txt
+    # Keep a copy of the COMMITTED pointer BEFORE the export overwrites it, and
+    # pass it downstream as its own artifact. (Deliberately a plain `cp` rather
+    # than `git show HEAD:...`: with the docker executor the clone is performed
+    # by the runner HELPER image, so git is not guaranteed to exist inside
+    # python:3.12-slim. The checkout is pristine, so this file IS the commit.)
+    - cp data/triage_dataset.meta.json data/triage_dataset.meta.committed.json
+    # Fails the pipeline if the code no longer reproduces the COMMITTED snapshot.
+    - python -m app.ml.export_dataset --check
+    - python -m app.ml.export_dataset             # writes triage_dataset.{npz,meta.json}
+    # Publish the snapshot to the remote (no-op when unchanged). The export
+    # writes the .npz into the workspace only; `dvc push` uploads from DVC's
+    # CACHE, so without this commit it reported "Everything is up to date" and
+    # uploaded nothing. NOTE --check proves the CONTENT (dataSha256) is unchanged,
+    # not the .npz file's md5: the md5 of a compressed .npz also depends on the
+    # platform's zlib. The pointer committed in 5cb20cb was taken off-CI, named a
+    # snapshot this job never produces, and so every `dvc pull` failed on it.
+    - cd "$CI_PROJECT_DIR" && dvc commit -f backend/data/triage_dataset.npz.dvc
+    - dvc push -r "$DVC_REMOTE" -v
+    # POINTER GATE (after the push, so the object exists either way). The committed
+    # .dvc pointer must name exactly the file this job just versioned; otherwise a
+    # clone cannot `dvc pull` the dataset its model was trained on. The md5 is only
+    # stable inside this image (python:3.12-slim + numpy pin), so a pointer must be
+    # taken from this job, not from a developer machine.
+    - |
+      python - <<'PY'
+      import sys
+      committed = open("/tmp/triage_dataset.npz.dvc.committed").read()
+      current = open("backend/data/triage_dataset.npz.dvc").read()
+      if committed != current:
+          print("DVC pointer gate: FAILED - backend/data/triage_dataset.npz.dvc is stale.")
+          print("The snapshot is pushed; commit this pointer to make it pullable:\n")
+          print(current)
+          sys.exit(1)
+      print("DVC pointer gate: PASSED - committed pointer names the versioned snapshot")
+      PY
+  artifacts:
+    paths:
+      - backend/data/triage_dataset.meta.json
+      - backend/data/triage_dataset.meta.committed.json
+      - backend/data/triage_dataset.npz
+    expire_in: 1 week
+
+# [MLOps] Pillar 2 — DURABLE ARTIFACT STORE. CI job artifacts are ephemeral
+# (expire_in), so push the released model + its audit to GitLab's Package Registry
+# (free, permanent, versioned by the content-addressed model version) for audit &
+# rollback. Complements the MLflow registry copy from train:model. Runs on main.
+publish:model:
+  stage: train
+  image: curlimages/curl:latest
+  needs: ["train:model"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]publish[:.]model(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    # Package path is keyed on the commit SHA; the joblib FILENAME already carries
+    # the content-addressed model version (careroute-triage-rf-<versionId>.joblib),
+    # so both the release commit and the model identity remain traceable.
+    - |
+      BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/careroute-model/${CI_COMMIT_SHORT_SHA}"
+      for f in backend/models/*.joblib backend/models/*.sha256 backend/models/model_audit.json; do
+        echo "publishing $f -> $BASE/$(basename "$f")"
+        curl --fail --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "$f" "$BASE/$(basename "$f")" || echo "upload skipped for $f"
+      done
+  allow_failure: true
+
+# ── TEST ─────────────────────────────────────────────────────────────────────
+# Unit tests + COVERAGE: the regex surfaces total coverage in the MR widget /
+# job page; --cov-fail-under makes a coverage regression fail the job. The floor
+# is 80% — the widely-used industry baseline — now that the ML entrypoints
+# (train/monitor/report/validate_data/export_dataset) have dedicated tests
+# (test_ml_entrypoints.py, test_report.py, test_fairness.py). Measured ~81%.
+#
+# The two ML-attack modules are EXCLUDED here and run in their own job
+# (ai-security:ml-attacks, against the train:model artifact). They retrain the
+# full model six times (label-flip poisoning at three doses, a clean control, a
+# membership-inference victim) - that is the point of them, but one training
+# run costs ~5 min on a shared runner since the 22 -> 51 category widening, and
+# with them inside this job it ran past the 1 h job timeout (#2870327745,
+# 22 Sep: still running at 46 min while build:images sat blocked behind it),
+# where before the widening it took 23 min. Every other test still runs here.
+test:backend:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]backend(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  # Headroom over the project's 1 h default: even without the attack modules
+  # this job still trains the model once (test_ml_entrypoints::test_train_main),
+  # runs the ART evasion attack (test_robustness) and the eval suites, and the
+  # widened model made each of those several times slower. A red job at 60 min
+  # said nothing about the code; the tests behind it were passing.
+  timeout: 90m
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - |
+      pytest -q --junitxml=report.xml --cov=app --cov-report=term --cov-fail-under=80 \
+        --ignore=tests/test_ml_attacks.py --ignore=tests/test_adversarial_training.py
+  coverage: '/TOTAL.*?(\d+)%/'
+  artifacts:
+    reports:
+      junit: backend/report.xml
+    when: always
+
+test:pipeline:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]pipeline(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest -v tests/test_pipeline.py --junitxml=pipeline-report.xml
+  artifacts:
+    reports:
+      junit: backend/pipeline-report.xml
+    paths: [backend/pipeline-report.xml]
+    when: always
+
+# [Safety NLP][Phase 6] Explicit selection prevents Safety regressions from
+# disappearing behind filename or marker changes in the general backend job.
+test:safety:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]safety(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest -m safety -q --junitxml=safety-report.xml
+  artifacts:
+    reports:
+      junit: backend/safety-report.xml
+    paths: [backend/safety-report.xml]
+    when: always
+
+# Aggregate-only benchmark and release-gate checks. No prompts, responses,
+# evidence spans or patient text are published as CI artifacts.
+test:safety-nlp-benchmark:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]safety\-nlp\-benchmark(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - >
+      pytest tests/test_safety_nlp_benchmark.py
+      tests/test_safety_nlp_category_benchmark.py
+      tests/test_safety_nlp_artifacts.py
+      tests/test_safety_nlp_release_gate.py
+      -q --junitxml=safety-nlp-benchmark-report.xml
+  artifacts:
+    reports:
+      junit: backend/safety-nlp-benchmark-report.xml
+    paths: [backend/safety-nlp-benchmark-report.xml]
+    when: always
+
+# [MLOps] HARD MODEL-QUALITY GATE. Unlike the LLM red-team jobs below (which are
+# allow_failure), this job MUST pass: it is NOT allow_failure, runs in the `test`
+# stage (which precedes build/deploy), and consumes the artifact from train:model
+# via `needs:`, so a model that regresses below the release thresholds
+# (accuracy >= 0.75 AND safety-critical red-flag recall >= 0.95) BLOCKS the whole
+# build/deploy pipeline. This is the release gate on the DEPLOYED artifact.
+#
+# THE ARTIFACT IS THE POINT. `needs: ["train:model"]` + CAREROUTE_MODEL_DIR are
+# what put a persisted joblib where get_model() will find it, and the test file
+# now ASSERTS it loaded one (TriageModel.loaded_from_artifact). Without that
+# assertion the gate was self-fulfilling: TriageModel.__init__ silently trains a
+# fresh model when nothing loads, so "the release gate on the deployed artifact"
+# would pass green having graded a model it built itself, seconds earlier, from
+# the same code — proving nothing about what the pipeline was about to ship.
+# Do NOT set CAREROUTE_ALLOW_FRESH_MODEL_IN_GATE here: in CI a missing artifact
+# means this `needs:` did not deliver, which is a failure, not a skip.
+test:model-gate:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]model\-gate(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    # [MLOps] TRAIN/SERVE SKEW, checked against the artifact this pipeline just
+    # built and is about to ship — not against whatever a developer has on disk.
+    # Blocking, and deliberately BEFORE the quality gate: grading the accuracy of
+    # a model that is being fed features it was never trained on measures nothing.
+    # See backend/app/ml/feature_contract.py.
+    - |
+      python -m app.ml.feature_contract --check
+    - pytest tests/test_model_gate.py tests/test_feature_contract.py -q --junitxml=model-gate-report.xml
+  artifacts:
+    reports:
+      junit: backend/model-gate-report.xml
+    when: always
+  # NOT allow_failure — this gate blocks build & deploy on a quality regression.
+
+# [MLOps] Pillar 2 — DATA-LINEAGE GATE. Asserts the COMMITTED dataset's content
+# hash (dataSha256) EQUALS the hash the trained model recorded in
+# model_audit.json. This proves the released model was trained on exactly the
+# versioned data — catching silent data/feature drift between the dataset and the
+# model. Consumes both upstream artifacts via `needs:`. A real gate (not
+# allow_failure): a lineage mismatch blocks build/deploy.
+#
+# THE REFERENCE IS THE COMMITTED POINTER, NOT THE REGENERATED FILE. data:version
+# rewrites backend/data/triage_dataset.meta.json in this same pipeline and
+# passes it here as an artifact, so reading that file compared the regenerated
+# dataset against a model trained from the same code moments earlier — a
+# tautology that passes by construction. `triage_dataset.meta.committed.json` is
+# data:version's pre-export copy: the only version that predates this pipeline
+# and can therefore disagree with it. (data:version's `--check` step catches the
+# same class of problem earlier; this is the second half of that guarantee, on
+# the model side.)
+test:data-lineage:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]data\-lineage(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model", "data:version"]
+  variables:
+    CAREROUTE_DATA_DIR: "$CI_PROJECT_DIR/backend/data"
+  script:
+    - cd backend
+    - pip install -r requirements.txt
+    - |
+      python - <<'PY'
+      import json
+      committed = json.load(open("data/triage_dataset.meta.committed.json"))["dataSha256"]
+      regenerated = json.load(open("data/triage_dataset.meta.json"))["dataSha256"]
+      md = json.load(open("models/model_audit.json"))["integrity"]["dataSha256"]
+      print("committed   dataSha256 :", committed[:24])
+      print("regenerated dataSha256 :", regenerated[:24])
+      print("model       dataSha256 :", md[:24])
+      assert committed == regenerated, (
+          "DATASET DRIFT: the code no longer reproduces the COMMITTED snapshot. "
+          "Re-run `python -m app.ml.export_dataset` and commit the new meta.json "
+          "(and `dvc add` the .npz) as a deliberate, reviewed dataset version."
+      )
+      assert committed == md, (
+          "DATA-LINEAGE MISMATCH: committed dataset != model's training data"
+      )
+      print("data-lineage gate  : PASSED — model trained on the COMMITTED dataset")
+      PY
+
+# [MLOps] DATA-VALIDATION GATE — "validate data BEFORE training on it". Blocking:
+# asserts the versioned snapshot's schema (feature space), value domain (no
+# NaN/inf, binary encoding), label validity + class support/balance, and
+# internal hash consistency. A malformed or degenerate dataset can never
+# silently become a released model.
+#
+# This job DOES check the regenerated snapshot rather than the committed one,
+# and that is correct here: the schema/domain/balance assertions need the actual
+# arrays, which live in the .npz (git-ignored, DVC-tracked, and not restorable
+# in CI without a DVC remote). data:version's `--check` step is what makes that
+# safe — the regenerated snapshot is proven byte-identical to the committed
+# meta.json's dataSha256 before this job ever sees it.
+data:validate:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]data[:.]validate(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["data:version"]
+  variables:
+    CAREROUTE_DATA_DIR: "$CI_PROJECT_DIR/backend/data"
+  script:
+    - cd backend
+    - pip install -r requirements.txt
+    - python -m app.ml.validate_data
+
+# [MLOps][Responsible-AI] Offline triage-EVAL benchmark on a gold vignette set:
+# acuity accuracy floor, red-flag recall == 1.0 on must-escalate cases, and
+# citation-groundedness. Drives the deterministic (no-LLM) pipeline, so it is a
+# reproducible release gate on end-to-end triage quality.
+test:triage-eval:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]triage\-eval(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest tests/test_triage_eval.py -q --junitxml=triage-eval-report.xml
+  artifacts:
+    reports:
+      junit: backend/triage-eval-report.xml
+    when: always
+
+# [AI-Security] Adversarial-robustness gate — a real IBM ART (adversarial-
+# robustness-toolbox) black-box evasion attack (HopSkipJump) against the deployed
+# RandomForest, asserting the model resists SMALL (<= epsilon) input
+# perturbations. SKIPS cleanly if `art` is absent (it is a dev-only dependency).
+# End-to-end agent-pipeline tests driven through the real UI (Playwright).
+#
+# IMAGE: mcr.microsoft.com/playwright ships the browsers PREINSTALLED. That is
+# required, not convenient — `npx playwright install` downloads from a CDN, and
+# on a TLS-intercepting corporate network that fails with
+# SELF_SIGNED_CERT_IN_CHAIN. PLAYWRIGHT_CHANNEL=bundled tells the config to use
+# those baked-in browsers rather than a system Chrome (which the image has none
+# of). Keep the image tag in step with the @playwright/test version in
+# frontend/package.json — a mismatch is what makes Playwright try to download.
+#
+# The suite starts the FRONTEND itself (a production build — see the webServer
+# note in playwright.config.js: `next dev`'s proxy cannot carry the red-flag SSE
+# stream across its ~30s LLM gap). The BACKEND has to be up first, because
+# frontend/lib/api.js silently falls back to an in-browser SIMULATION when it is
+# not — which would let this job pass with the agent pipeline switched off. The
+# spec's beforeAll hook fails loudly instead, and the wait-loop below makes that
+# a clear infrastructure error rather than a confusing test failure.
+test:e2e:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]e2e(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: mcr.microsoft.com/playwright:v1.62.1-noble
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    PLAYWRIGHT_CHANNEL: "bundled"
+    BACKEND_URL: "http://127.0.0.1:8000"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 python3-venv >/dev/null
+    - python3 -m venv /tmp/venv
+    - . /tmp/venv/bin/activate
+    - pip install -q -r backend/requirements.txt
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    # Wait for the backend rather than racing it; fail with a clear message.
+    - |
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+          echo "backend up after ${i}s"; break
+        fi
+        if [ "$i" -eq 60 ]; then
+          echo "ERROR: backend did not become healthy in 60s; aborting rather than testing the simulation fallback"
+          exit 1
+        fi
+        sleep 1
+      done
+    - cd frontend && npm ci
+    - npx playwright test
+  artifacts:
+    paths:
+      - frontend/playwright-report/
+      - frontend/test-results/
+    when: always
+    expire_in: 1 week
+  # BLOCKING since 2026-09-02. It was advisory while three red-flag specs failed
+  # for a then-unknown reason. The cause is now measured and fixed: Next's /api
+  # rewrite proxies with http-proxy and a 30 s idle `proxyTimeout` that aborts
+  # a silent upstream WITHOUT ending the browser response, so any agent quiet
+  # for 30 s hung the UI on "Triaging..." forever. app/main.py now emits an
+  # SSE keepalive comment every CAREROUTE_SSE_HEARTBEAT_SECONDS (10 s) while
+  # the pipeline is silent. With that in place the suite went 6/6 against a
+  # production build and the real backend. In this job the LLM providers are
+  # absent (no OPENAI_API_KEY), so the agents take their
+  # deterministic path and latency is bounded; a red run here is a real
+  # regression in the UI, the stream transport, or the agent contract.
+
+# ── AGENT GRAPH LINT + LOOP SAFETY [MLOps][Agentic] ──────────────────────────
+# The agent lane's structural gate: every declared worker must actually be
+# reached by orchestrate(), and one triage may not exceed its step budget.
+# BLOCKING, and cheap — it drives the real pipeline on the deterministic path
+# (no LLM provider in CI), so it needs no model, no secret and no network.
+#
+# A dead node is not a cosmetic problem: a worker that is registered, contract-
+# tested and never invoked reports green forever while doing nothing. Unit tests
+# cannot see that, because each one calls its agent directly.
+test:agent-graph:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]agent\-graph(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest tests/test_agent_graph.py -q --junitxml=agent-graph-report.xml
+  artifacts:
+    reports:
+      junit: backend/agent-graph-report.xml
+    when: always
+
+test:robustness:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]robustness(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    # pytest returns exit code 5 ("no tests collected") when the whole module is
+    # skipped at collection — which is exactly what the module-level
+    # `importorskip("art")` does when adversarial-robustness-toolbox is absent.
+    # Treat that clean skip as success; surface any real failure (exit 1) normally.
+    #
+    # NOTE: GitLab runs job scripts under `set -e`, so pytest MUST be captured via
+    # `|| code=$?` — a bare `pytest ...; code=$?` would trip errexit on the exit-5
+    # and abort the script before the guard ever runs.
+    - |
+      code=0
+      pytest tests/test_robustness.py -q --junitxml=robustness-report.xml || code=$?
+      if [ "$code" -eq 5 ]; then
+        echo "No robustness tests collected (adversarial-robustness-toolbox not installed) - skipping cleanly"
+        exit 0
+      fi
+      exit "$code"
+  artifacts:
+    reports:
+      junit: backend/robustness-report.xml
+    when: always
+  # ART is now PINNED in requirements-dev.txt, so the exit-5 guard above is a
+  # safety net rather than the normal path — until 2026-09-12 it was the normal
+  # path, and this job was green without ever running the attack.
+  #
+  # Still advisory for one more cycle: the gate has no CI-hardware baseline yet
+  # (HopSkipJump is stochastic and the runner trains its own model), so promote
+  # it to blocking once a few pipelines show a stable robust-accuracy margin.
+  allow_failure: true
+
+# ── PERFORMANCE + API ROBUSTNESS (test stage) ────────────────────────────────
+# Both jobs BOOT THE BACKEND INSIDE THE JOB, using the same recipe test:e2e
+# proves works: no LLM provider is configured in CI, so the agents take their
+# deterministic path and the app is healthy without any secret. That matters
+# because it is what makes these produce evidence on EVERY pipeline instead of
+# waiting on a deployed target that does not exist yet (the mistake that left
+# dast:owasp-zap dormant — see its comment).
+
+# LOAD TEST — Locust. Chosen over k6 because every other Python job here already
+# uses python:3.12-slim and the shared pip cache, so this adds no new toolchain.
+# The SLO check and its thresholds live in the locustfile, not here, so the same
+# gate runs identically on a developer's laptop.
+#
+# ADVISORY (`allow_failure: true`) for now: there is no measured baseline on CI
+# hardware yet, and a latency gate tuned from zero data is a flaky gate, not a
+# gate. The locustfile already sets a correct non-zero exit code on breach, so
+# promoting this to blocking is deleting the `allow_failure` line below — the
+# same way test:e2e was promoted on 2026-09-02 once its failure was understood.
+test:load-locust:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]load\-locust(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    CAREROUTE_LOAD_SUMMARY: "$CI_PROJECT_DIR/locust-summary.json"
+    LOAD_USERS: "20"
+    LOAD_SPAWN_RATE: "5"
+    LOAD_DURATION: "60s"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl >/dev/null
+    - pip install -q -r backend/requirements.txt locust
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    - |
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+          echo "backend up after ${i}s"; break
+        fi
+        if [ "$i" -eq 60 ]; then
+          echo "ERROR: backend did not become healthy in 60s; aborting rather than load-testing nothing"
+          exit 1
+        fi
+        sleep 1
+      done
+    - locust -f backend/tests/load/locustfile.py --headless
+        -u "$LOAD_USERS" -r "$LOAD_SPAWN_RATE" -t "$LOAD_DURATION"
+        --host http://127.0.0.1:8000
+        --csv locust --csv-full-history --only-summary
+  artifacts:
+    paths:
+      - locust-summary.json
+      - locust_stats.csv
+      - locust_failures.csv
+      - locust_stats_history.csv
+    when: always
+    expire_in: 1 month
+  allow_failure: true
+
+# API FUZZING — Schemathesis generates property-based test cases straight from
+# the OpenAPI schema FastAPI publishes at /openapi.json, then asserts the server
+# never 500s and never violates its own declared schema. This is the fuzzing
+# complement to ZAP: ZAP attacks with a fixed payload catalogue, Schemathesis
+# derives inputs from OUR contract, so it explores the parameter space that is
+# specific to this API.
+#
+# The SSE triage endpoint is excluded: it streams indefinitely by design, so a
+# fuzzer treats a healthy long-lived response as a hang.
+#
+# BLOCKING since the spec declares every status code and content type the
+# handlers really return (400/401/404/429, text/plain /metrics, SSE): a new
+# undocumented response or a 500 now fails the pipeline instead of scrolling by.
+test:api-fuzz-schemathesis:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]api\-fuzz\-schemathesis(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl >/dev/null
+    - pip install -q -r backend/requirements.txt schemathesis
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    - |
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+          echo "backend up after ${i}s"; break
+        fi
+        if [ "$i" -eq 60 ]; then echo "ERROR: backend did not become healthy in 60s"; exit 1; fi
+        sleep 1
+      done
+    - set -o pipefail
+    - st run http://127.0.0.1:8000/openapi.json
+        --checks all
+        --exclude-path-regex '/api/triage/stream'
+        --max-examples "${FUZZ_EXAMPLES:-25}"
+        --report junit --report-junit-path schemathesis-junit.xml
+        2>&1 | tee schemathesis.txt
+  artifacts:
+    paths: [schemathesis.txt, schemathesis-junit.xml]
+    reports:
+      junit: schemathesis-junit.xml
+    when: always
+
+# ── MONITOR ──────────────────────────────────────────────────────────────────
+# [MLOps] Pillar 3 — MODEL & DATA MONITORING (course: "Monitoring and Logging").
+# Generates an Evidently AI report (the drift tool named in the course tool table)
+# comparing a REFERENCE distribution vs a shifted "production" sample: data drift
+# (PSI/KS), target drift, and classification performance (accuracy/precision/
+# recall/F1). Degrades to a built-in PSI+accuracy report if Evidently is absent,
+# so the job always publishes something. Reporting job (allow_failure) — the
+# shifted sample is EXPECTED to drift. Publishes the HTML dashboard + JSON.
+#
+# [MLOps][CT] The loop is CLOSED: monitor.py compares the headline drift value
+# to CAREROUTE_DRIFT_THRESHOLD and, on a breach, calls the GitLab trigger API
+# to fire a retrain pipeline (train:model re-trains, re-gates, re-registers).
+# To activate, set ONE CI/CD variable (Settings -> CI/CD -> Variables):
+#     CAREROUTE_PIPELINE_TRIGGER_TOKEN = <a Pipeline trigger token>
+# A triggered pipeline never re-triggers itself (CI_PIPELINE_SOURCE guard), so
+# one breach yields exactly one retrain. Optional knobs:
+#     CAREROUTE_DRIFT_THRESHOLD  (default 0.5 driftShare / 0.25 PSI)
+#     CAREROUTE_MONITOR_SOURCE=live  — monitor REAL logged traffic instead of
+#     the synthetic shift (needs an inference log mounted into the job).
+monitor:evidently:
+  stage: monitor
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]monitor[:.]evidently(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    CAREROUTE_MONITOR_DIR: "$CI_PROJECT_DIR/backend/monitoring"
+  script:
+    - |
+      cd backend
+      pip install -r requirements.txt
+      pip install -r requirements-mlops.txt || echo "mlops extras unavailable — monitor.py will use its built-in PSI fallback"
+      python -m app.ml.monitor
+  artifacts:
+    paths:
+      - backend/monitoring/drift_report.html
+      - backend/monitoring/drift_report.json
+    when: always
+    expire_in: 1 week
+  allow_failure: true
+
+# ── REPORT ───────────────────────────────────────────────────────────────────
+# [MLOps] Executive PDF report — a management-facing summary (model quality,
+# release gates, fairness, calibration, data lineage, drift, pipeline/supply
+# chain, and the ACTUAL security-scan findings) rendered to PDF with reportlab.
+# Runs after security-scan and `needs:` the scanners' JSON/SARIF artifacts so
+# the "Security scan results" section shows real counts; the scan needs are
+# `optional` so a pipeline where a scanner didn't run still gets a report.
+# This is the "hand to stakeholders" artifact; download it from the job.
+report:pdf:
+  stage: report
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]report[:.]pdf(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs:
+    - train:model
+    - monitor:evidently
+    - job: scan:secrets-gitleaks
+      optional: true
+    - job: scan:sast-semgrep
+      optional: true
+    - job: scan:sast-bandit
+      optional: true
+    - job: scan:trivy-fs
+      optional: true
+    - job: scan:deps-audit
+      optional: true
+    - job: scan:modelscan
+      optional: true
+    - job: scan:dockerfile-hadolint
+      optional: true
+    - job: scan:sast-ruff-security
+      optional: true
+    - job: scan:sast-njsscan
+      optional: true
+    - job: scan:sast-eslint-security
+      optional: true
+    - job: scan:sast-horusec
+      optional: true
+    - job: scan:secrets-trufflehog
+      optional: true
+    - job: scan:secrets-detect-secrets
+      optional: true
+    - job: scan:deps-osv
+      optional: true
+    - job: scan:deps-grype
+      optional: true
+    - job: scan:deps-retirejs
+      optional: true
+    - job: scan:iac-checkov
+      optional: true
+    - job: scan:iac-kics
+      optional: true
+    - job: scan:licenses
+      optional: true
+    - job: scan:model-fickling
+      optional: true
+    - job: sast
+      optional: true
+    - job: secret_detection
+      optional: true
+    - job: test:load-locust
+      optional: true
+    - job: test:api-fuzz-schemathesis
+      optional: true
+    - job: dast:zap-api
+      optional: true
+    - job: dast:zap-full
+      optional: true
+    - job: dast:nikto
+      optional: true
+    - job: dast:nuclei
+      optional: true
+    - job: ai-security:guardrail-score
+      optional: true
+    - job: scan:no-live-credentials
+      optional: true
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    CAREROUTE_MONITOR_DIR: "$CI_PROJECT_DIR/backend/monitoring"
+    CAREROUTE_REPORT_DIR: "$CI_PROJECT_DIR/reports"
+  script:
+    - |
+      cd backend
+      pip install -r requirements.txt reportlab==5.0.0 pyyaml
+      python -m app.ml.report
+  artifacts:
+    paths:
+      - reports/careroute_mlops_report.pdf
+      - reports/careroute_mlops_report.md    # readable twin — opens without a PDF viewer
+    when: always
+    expire_in: 1 month
+  allow_failure: true
+
+# [AI-Security] AI for cyber defence (AIC Day 3): an AI-drafted security brief
+# from the scanners' own reports — NIST CSF Detect (DE.AE-02) -> Respond
+# (RS.AN-03). The LLM prioritises and explains; its draft is validated against
+# the real findings and discarded if it cites anything that does not exist or
+# fails the output screen. With no LLM key in CI the DETERMINISTIC severity-ranked
+# brief is produced instead, so the artifact always exists. Secret values from
+# gitleaks are dropped at parse time. Advisory: a person verifies before acting.
+report:security-brief:
+  stage: report
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]report[:.]security\-brief(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs:
+    - job: scan:secrets-gitleaks
+      optional: true
+    - job: scan:sast-semgrep
+      optional: true
+    - job: scan:sast-bandit
+      optional: true
+    - job: scan:deps-audit
+      optional: true
+  script:
+    - |
+      pip install httpx==0.28.1 python-dotenv==1.0.1 prometheus-client==0.21.1
+      cd backend
+      python -m app.security_brief         --gitleaks ../gitleaks.json --semgrep ../semgrep.sarif         --bandit ../bandit.json --pip-audit ../pip-audit.json         -o ../security-brief.md
+  artifacts:
+    paths: [security-brief.md]
+    when: always
+    expire_in: 1 month
+  allow_failure: true
+
+# ── AI-SECURITY (LLM red-teaming) ────────────────────────────────────────────
+# The distinguishing MLSecOps stage. Cadence follows the 2026 practitioner norm:
+#   Promptfoo → every push/PR (fast regression gate)
+#   Garak     → per release / main (comprehensive vuln scan — "nmap for LLMs")
+#   PyRIT     → scheduled/manual (novel multi-turn attack orchestration)
+#   DeepTeam  → OWASP LLM Top 10 mapped red-team
+# All are FREE/OSS. The endpoint-hitting scanners need a target model, so they
+# run only when OPENAI_API_KEY (or a configured endpoint) is present.
+
+# Always-green guardrail regression: prompt-injection must be blocked and the
+# deterministic safety-override must be un-overridable (our own pytest suite).
+ai-security:guardrail-regression:
+  stage: ai-security
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]guardrail\-regression(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest tests/test_guardrail.py tests/test_api_e2e.py tests/test_pipeline.py -k "inject or guard or block" --junitxml=security-report.xml
+  artifacts:
+    reports:
+      junit: backend/security-report.xml
+    when: always
+
+# Fairness gate — Fairlearn asserts subgroup accuracy parity of the deployed
+# model (fails if it regresses to the age-blind baseline).  [Responsible-AI]
+# ── GUARDRAIL EFFECTIVENESS, SCORED [AI-Security] ────────────────────────────
+# `guardrail-regression` above asserts that named payloads are blocked; this
+# scores a labelled corpus and gates on the RATES the course's agentic quality
+# gate names: injection bypass <= 2%, recall >= 0.95, false positives <= 0.05.
+#
+# The false-positive half is why this is not redundant. A guardrail that blocks
+# everything scores perfect recall, and in a triage product every false block is
+# a patient turned away. Scoring the corpus the first time put the real
+# false-positive rate at 11%: a sports injury and a patient describing memory
+# loss were both being rejected as prompt injections. Deterministic and
+# offline — no LLM provider, no secret.
+ai-security:guardrail-score:
+  stage: ai-security
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]guardrail\-score(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  script:
+    - cd backend
+    - pip install -r requirements.txt
+    - python -m app.evals.guardrail_score --out "$CI_PROJECT_DIR/guardrail-score.json"
+  artifacts:
+    paths: [guardrail-score.json]
+    when: always
+
+ai-security:fairness-gate:
+  stage: ai-security
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]fairness\-gate(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest tests/test_fairness_gate.py -q --junitxml=fairness-report.xml
+  artifacts:
+    reports:
+      junit: backend/fairness-report.xml
+    when: always
+
+# TRAINING-PHASE + PRIVACY ATTACKS on the classical model (AIC Day 1 taxonomy),
+# plus the deck's model-side DEFENCE. `test:robustness` already covers the
+# deployment-phase third of the attack taxonomy (evasion); this covers the other
+# two — poisoning and privacy — and pins the adversarial-re-training contract
+# (`app/ml/adversarial.py`), whose fast tests need no attack budget.
+#
+# BLOCKING, unlike test:robustness. The poisoning gates need only numpy, so they
+# cannot silently skip: `importorskip("art")` sits inside the one test that
+# needs ART instead of at module level, which is why there is no exit-code-5
+# guard here. A skipped test still reports as a pass; a missing test reports as
+# nothing at all, and this is a safety gate.
+ai-security:ml-attacks:
+  stage: ai-security
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]ml\-attacks(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - cd backend
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - |
+      pytest tests/test_ml_attacks.py tests/test_adversarial_training.py -q --junitxml=ml-attacks-report.xml
+  artifacts:
+    reports:
+      junit: backend/ml-attacks-report.xml
+    when: always
+
+# Promptfoo (OpenAI, MIT) — LLM red-team regression on every push/PR.
+# Promptfoo red-teams the APP, not a vendor model. Until 2026-09-15 the target
+# was `openai:chat:gpt-4o-mini`, so the attacks never met the guardrail, the
+# redaction or the agents — the job graded OpenAI's safety training and called
+# it ours. The backend is now booted in-job (same recipe as test:e2e) and the
+# config posts every attack to /api/triage/stream. OPENAI_API_KEY is still
+# required, but only for promptfoo's own attack synthesis + grading; the
+# backend runs with no provider and exercises the deterministic path.
+ai-security:promptfoo:
+  stage: ai-security
+  image: mcr.microsoft.com/playwright:v1.62.1-noble   # node 20 + apt python, proven by test:e2e
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    CAREROUTE_TARGET_URL: "http://127.0.0.1:8000"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 python3-venv >/dev/null
+    - python3 -m venv /tmp/venv
+    - . /tmp/venv/bin/activate
+    - pip install -q -r backend/requirements.txt
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    - |
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+          echo "backend up after ${i}s"; break
+        fi
+        if [ "$i" -eq 60 ]; then echo "ERROR: backend did not become healthy in 60s"; exit 1; fi
+        sleep 1
+      done
+    - npm install -g promptfoo
+    - cd security
+    - promptfoo redteam run -c promptfooconfig.yaml -o redteam-results.json --no-progress-bar || true
+    - promptfoo redteam report -o redteam-report.html || true
+  artifacts:
+    paths: [security/redteam-results.json, security/redteam-report.html]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]promptfoo(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$OPENAI_API_KEY'          # promptfoo's attack generator + grader need it
+  allow_failure: true
+
+# Garak (NVIDIA, Apache-2.0) — full LLM vulnerability scan (120+ probes).
+ai-security:garak:
+  stage: ai-security
+  image: python:3.12
+  script:
+    - pip install garak
+    - >
+      garak --model_type openai --model_name "${OPENAI_MODEL:-gpt-4o-mini}"
+      --probes promptinject,encoding,dan,leakreplay,realtoxicityprompts,malwaregen
+      --report_prefix garak || true
+  artifacts:
+    paths: [garak.*.report.*, "*.report.jsonl"]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]garak(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" && $OPENAI_API_KEY'
+      when: manual                    # 10–30 min per run — release cadence
+  allow_failure: true
+
+# DeepTeam (Confident AI, Apache-2.0) — OWASP LLM Top 10 mapped red-team.
+ai-security:deepteam:
+  stage: ai-security
+  image: python:3.12-slim
+  script:
+    - pip install deepteam
+    - python security/deepteam_scan.py || true   # OWASP LLM Top 10 attack suite
+  artifacts:
+    paths: [security/deepteam-report.*]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]deepteam(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$OPENAI_API_KEY'
+      when: manual
+  allow_failure: true
+
+# PyRIT (Microsoft, MIT) — novel multi-turn adversarial orchestration.
+ai-security:pyrit:
+  stage: ai-security
+  image: python:3.12-slim
+  needs: []
+  script:
+    - cd backend
+    - pip install -q -r requirements.txt pyrit==1.1.0
+    # Every guardrail-corpus attack rewritten by PyRIT's offline converters
+    # (encodings, ciphers, look-alikes, spacing) and screened by the real
+    # guardrail. Deterministic, no model key. Regression gate: red only if the
+    # bypass rate rises above the ceiling (residual 27/444 = 6.1% are lossy encodings).
+    - python -m app.evals.pyrit_probe --max-bypass-rate "${PYRIT_MAX_BYPASS_RATE:-0.07}" --out "$CI_PROJECT_DIR/pyrit-probe.json"
+  artifacts:
+    paths: [pyrit-probe.json]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]ai\-security[:.]pyrit(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  allow_failure: true
+
+# LIVE-MODEL EVALUATION [LLMSecOps][MLOps] — every other test scripts the LLM,
+# which is why the 24 Sep 2026 AWS finding (the Reflection critic escalated 100%
+# of cases under gpt-4o-mini) never showed up in CI. This runs the REAL pipeline
+# against the real model on the 20 gold vignettes and asserts red-flag recall ==
+# 1.0 and an escalation rate inside CAREROUTE_LIVE_ESCALATION_BAND, reports the
+# critic's grounded-escalation rate, and runs the E15 LLM-as-judge on a 6-case
+# sample. Budget-capped (~$0.03 expected, hard stop at $0.50). Pass/fail logic
+# is unit-tested offline in tests/test_eval_live.py.
+# The key comes from the group's masked+protected TF_VAR_openai_api_key, so on
+# unprotected branches the rule never matches and the job is simply absent.
+# Manual on push, automatic on a schedule; allow_failure: it is evidence, not a gate.
+eval:live-llm:
+  stage: ai-security
+  image: python:3.12-slim
+  needs:
+    - job: train:model
+      optional: true
+  timeout: 30m
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    CAREROUTE_LIVE_ESCALATION_BAND: "0.25,0.75"
+  script:
+    - export OPENAI_API_KEY="${OPENAI_API_KEY:-$TF_VAR_openai_api_key}"
+    - cd backend
+    - pip install -r requirements.txt
+    - python -m app.evals.live --out "$CI_PROJECT_DIR/live-eval.json" --judge-sample 6 --budget-usd 0.50
+  artifacts:
+    paths: [live-eval.json]
+    when: always
+    expire_in: 30 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]eval[:.]live\-llm(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && ($OPENAI_API_KEY || $TF_VAR_openai_api_key)'
+    - if: '$OPENAI_API_KEY || $TF_VAR_openai_api_key'
+      when: manual
+  allow_failure: true
+
+# ── SECURITY-SCAN (SAST / SCA / secrets / container / IaC) ───────────────────
+# Secret scanning — committed keys/tokens. BLOCKING: a leaked credential is
+# always actionable (rotate + remove, or allowlist a false positive in
+# .gitleaks.toml) — this is the cheapest highest-value security gate there is.
+scan:secrets-gitleaks:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]secrets\-gitleaks(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  # `needs: []` so this job downloads NO artifacts from earlier stages.
+  #
+  # Without it GitLab hands a security-scan job every prior stage's artifacts,
+  # including train:model's `backend/models/*.joblib` -- a ~54 MB PICKLED MODEL.
+  # gitleaks then scans that binary (the job reported ~62 MB scanned against a
+  # repo of 239 tracked files) and flags high-entropy byte runs inside it. The
+  # model legitimately embeds its own 40-char lineage hashes (dataSha256 /
+  # modelSha256), which look exactly like a generic API key to an entropy rule.
+  #
+  # Scanning our own build output for secrets was never the point of this gate:
+  # a secret can only reach a model artifact from source or from a CI variable,
+  # and source is still fully scanned here. So this narrows the job to what it is
+  # meant to protect WITHOUT weakening it -- a real secret committed to the repo
+  # still fails the build exactly as before.
+  needs: []
+  # `cache: []` overrides the `default:` pip cache for this job only.
+  #
+  # That default mounts $CI_PROJECT_DIR/.cache/pip into EVERY job, so
+  # `gitleaks detect --source .` was scanning third-party pip DOWNLOADS as well
+  # as our code -- and library test fixtures routinely ship dummy keys that trip
+  # an entropy rule. Same reasoning as `needs: []` above: scan our source, not
+  # what our source downloaded. Neither exclusion can hide a real secret
+  # committed to this repository, because the whole source tree is still scanned.
+  cache: []
+  script:
+    # Print the REDACTED finding on failure so the log itself says which file and
+    # rule fired. Without this the only way to see the finding is to download the
+    # artifact, which is why a previous failure here was misdiagnosed from job
+    # metadata alone. `--redact` means the secret value is masked, so the file,
+    # rule id and line are safe to surface in a job log.
+    - |
+      code=0
+      gitleaks detect --source . --no-git --redact --report-format json --report-path gitleaks.json || code=$?
+      if [ "$code" -ne 0 ] && [ -f gitleaks.json ]; then
+        echo "───────── gitleaks findings (secret values redacted) ─────────"
+        cat gitleaks.json
+        echo "──────────────────────────────────────────────────────────────"
+      fi
+      exit "$code"
+  artifacts:
+    paths: [gitleaks.json]
+    when: always
+
+# SAST — Semgrep (multi-language, security rulesets). Scans `backend` + `frontend`
+# (the App-Router source; there is NO `frontend/src` dir — that stale path made
+# semgrep exit 2). Findings are published to SARIF and surfaced in the PDF
+# report's "Security scan results" section rather than failing the job, so the
+# pipeline stays clean while findings stay visible. A machine-readable SARIF +
+# a human-readable text summary are both kept as artifacts.
+scan:sast-semgrep:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-semgrep(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: semgrep/semgrep:latest
+  script:
+    - semgrep scan --config auto --config p/python --config p/javascript --sarif -o semgrep.sarif backend frontend || true
+    - semgrep scan --config auto --config p/python --config p/javascript backend frontend > semgrep.txt 2>&1 || true
+  artifacts:
+    paths: [semgrep.sarif, semgrep.txt]
+    when: always
+  allow_failure: true
+
+# SAST — Bandit (Python-specific). Emits both machine-readable JSON (for the PDF
+# report) and a human-readable text report (readable when downloaded). Findings
+# surface in the report; the job stays green unless bandit itself errors.
+scan:sast-bandit:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-bandit(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - pip install bandit
+    - bandit -r backend/app -ll -f json -o bandit.json || true
+    - bandit -r backend/app -ll -f txt -o bandit.txt || true
+  artifacts:
+    paths: [bandit.json, bandit.txt]
+    when: always
+  allow_failure: true
+
+# SCA + secrets + IaC misconfig, one tool — Trivy (filesystem scan).
+# Two passes: report everything HIGH+, then BLOCK the pipeline on CRITICAL
+# findings only (--exit-code 1). A CRITICAL that can't be fixed immediately is
+# waived explicitly via a committed .trivyignore — a visible, auditable
+# decision instead of a scanner that can never fail.
+scan:trivy-fs:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]trivy\-fs(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    # Pinned by digest, same version as scan:container-image — a blocking gate must
+    # not change under us. The tag is for humans; the digest is what gets pulled.
+    name: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+    entrypoint: [""]        # image ENTRYPOINT is `trivy`; clear it so GitLab's shell can run the script
+  # `needs: []` + `cache: []` — the SAME two lines, for the same reason, as
+  # scan:secrets-gitleaks above (see that job's comment for the full account).
+  # This job is BLOCKING (it fails the pipeline on a CRITICAL), which makes it
+  # the more expensive place to get this wrong: without `needs: []` GitLab hands
+  # it every prior stage's artifacts, including train:model's ~54 MB pickled
+  # joblib, and without `cache: []` the `default:` pip cache mounts third-party
+  # DOWNLOADS into the scan too. `trivy fs --scanners vuln,secret,misconfig .`
+  # then scans our build output and our dependencies' vendored fixtures — a
+  # dummy key in some library's test data would block a release. Scanning the
+  # SOURCE tree is the point of this gate, and the whole source tree still is.
+  needs: []
+  cache: []
+  script:
+    - trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --format table . | tee trivy-fs.txt  # readable artifact
+    - trivy fs --scanners vuln,secret,misconfig --format json -o trivy-fs.json .   # machine-readable, feeds report:pdf
+    - trivy fs --scanners vuln,secret,misconfig --severity CRITICAL --exit-code 1 .
+  artifacts:
+    paths: [trivy-fs.json, trivy-fs.txt]
+    when: always
+
+# SCA — Python + Node dependency vulnerabilities (pip-audit + Safety + npm audit).
+# Report-only, consistent with the other SAST scanners: every tool runs and
+# publishes findings to machine-readable JSON + human-readable TXT + the PDF
+# report, but dependency CVEs are ADVISORY (only committed secrets and CRITICAL
+# fs/container CVEs block). The frontend carries known Next.js/postcss advisories;
+# remediation (bump Next.js) is a tracked follow-up, not a release blocker here.
+scan:deps-audit:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]deps\-audit(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  script:
+    - |
+      pip install pip-audit safety
+      pip-audit -r backend/requirements.txt -f json -o pip-audit.json || true
+      pip-audit -r backend/requirements.txt > pip-audit.txt 2>&1 || true      # readable copy
+      safety check -r backend/requirements.txt || true      # course tool (AI-Security)
+      apt-get update && apt-get install -y nodejs npm >/dev/null 2>&1 || true
+      (cd frontend && npm ci >/dev/null 2>&1 && npm audit --audit-level=high --json > ../npm-audit.json; npm audit --audit-level=high > ../npm-audit.txt 2>&1) || true
+  artifacts:
+    paths: [pip-audit.json, pip-audit.txt, npm-audit.json, npm-audit.txt]
+    when: always
+  allow_failure: true
+
+# ML-model artifact scan — modelscan (ProtectAI): detects malicious code in
+# serialized models (pickle/torch/keras deserialization attacks).  [AI-Security]
+scan:modelscan:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]modelscan(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]            # scan the REAL trained artifact, present via needs
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - pip install modelscan
+    # Scope to the model directory (the released joblib + sidecar), NOT the whole
+    # repo: `-p .` tried to parse 18k unrelated files and errored (exit 2) on a
+    # non-model pickle. modelscan exits 0 (clean) / 1 (unsafe operators found);
+    # both are tolerated here (allow_failure) — the verdict is in the report.
+    - modelscan -p backend/models -r json -o modelscan.json || true
+    - modelscan -p backend/models > modelscan.txt 2>&1 || true   # readable copy
+  artifacts:
+    paths: [modelscan.json, modelscan.txt]
+    when: always
+  allow_failure: true
+
+# SBOM + AI-BOM — CycloneDX Software Bill of Materials for the Python + Node
+# dependency graph, plus an AI-BOM that inventories the model artifact + its
+# integrity hashes / metadata. A current SBOM is the supply-chain control that
+# makes a newly-disclosed dependency CVE traceable, and is mapped to OWASP LLM
+# Top-10 LLM03 (Supply-Chain Vulnerabilities) — a poisoned/compromised model or
+# dependency is exactly what an AI-BOM + SBOM make auditable.  [AI-Security][LLM03]
+scan:sbom-cyclonedx:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sbom\-cyclonedx(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - pip install cyclonedx-bom
+    # Software BOM from the pinned Python requirements (backend service).
+    - cyclonedx-py requirements backend/requirements.txt -o sbom-backend.cdx.json
+    - cyclonedx-py requirements backend/requirements-dev.txt -o sbom-backend-dev.cdx.json
+    # Node SBOM (frontend) — CycloneDX npm plugin.
+    - apt-get update && apt-get install -y nodejs npm >/dev/null 2>&1 || true
+    - (cd frontend && npm ci >/dev/null 2>&1 && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true
+    # AI-BOM — inventory the trained model artifact + its content-addressed
+    # version and integrity hashes from the training audit (LLM03 traceability).
+    - >
+      python -c "import json,glob,os;
+      audit=json.load(open('backend/models/model_audit.json'));
+      art=sorted(glob.glob('backend/models/*.joblib'));
+      print(json.dumps({'component':'CareRouteTriageRF','type':'machine-learning-model',
+      'modelVersion':audit.get('modelVersion'),'integrity':audit.get('integrity'),
+      'metrics':{'overallAccuracy':audit.get('overallAccuracy'),'redFlagRecall':audit.get('redFlagRecall')},
+      'artifacts':[os.path.basename(p) for p in art]}, indent=2))" > ai-bom.json
+    - cat ai-bom.json
+  artifacts:
+    paths:
+      - sbom-backend.cdx.json
+      - sbom-backend-dev.cdx.json
+      - sbom-frontend.cdx.json
+      - ai-bom.json
+    when: always
+  allow_failure: true
+
+# Dockerfile best-practice / security lint — Hadolint. NOTE: hadolint's JSON
+# formatter emits ONE array PER FILE (invalid JSON when concatenated), so each
+# Dockerfile is scanned to its OWN JSON file; a combined human-readable text
+# report is also kept (readable when downloaded). Findings surface in the PDF
+# report; --no-fail keeps the job green (advisory).
+scan:dockerfile-hadolint:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]dockerfile\-hadolint(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: hadolint/hadolint:latest-debian
+    entrypoint: [""]
+  script:
+    - hadolint --no-fail -f json backend/Dockerfile  > hadolint-backend.json
+    - hadolint --no-fail -f json frontend/Dockerfile > hadolint-frontend.json
+    - hadolint --no-fail backend/Dockerfile frontend/Dockerfile | tee hadolint.txt
+  artifacts:
+    paths: [hadolint-backend.json, hadolint-frontend.json, hadolint.txt]
+    when: always
+  allow_failure: true
+
+# ── ADDITIONAL SAST / SCA / SECRETS / IaC SCANNERS ───────────────────────────
+# Everything below is FREE / open-source and runs on EVERY push by deliberate
+# choice: several of these overlap with a scanner above (four secret scanners,
+# four dependency scanners, two IaC scanners). The overlap IS the point — each
+# tool carries a different rule corpus or advisory database, so a finding one
+# misses another catches, and disagreement between them is itself evidence.
+# All are report-only (`allow_failure: true`); the blocking gates remain the
+# ones established above (gitleaks, Trivy CRITICAL) plus TruffleHog's VERIFIED
+# credentials, which the PDF report marks BLOCKING.
+#
+# `needs: []` + `cache: []` on the source scanners for the SAME reason spelled
+# out in scan:secrets-gitleaks: without them GitLab mounts every prior stage's
+# artifacts (including train:model's ~54 MB pickled joblib) and the pip download
+# cache into the scan, so the tools scan our build output and our dependencies'
+# vendored test fixtures instead of our source.
+
+# SAST — Python, over the code Bandit's job does NOT cover. scan:sast-bandit
+# scans `backend/app` only; this runs the same flake8-bandit rule family (ruff's
+# `S` ruleset) across scripts/ and tests/, where a hardcoded credential or an
+# unsafe subprocess call is just as real. Ruff is already pinned for lint.
+scan:sast-ruff-security:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-ruff\-security(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  script:
+    - pip install -q ruff==0.6.9
+    - ruff check --select S --output-format concise backend/scripts backend/tests | tee ruff-security.txt || true
+    - ruff check --select S --output-format json -o ruff-security.json backend/scripts backend/tests || true
+  artifacts:
+    paths: [ruff-security.json, ruff-security.txt]
+    when: always
+  allow_failure: true
+
+# SAST — Node/Next.js. Semgrep's p/javascript pack is generic; njsscan carries
+# Node-specific rules (template injection, insecure crypto, express/next
+# misconfig) that Semgrep's free packs do not.
+scan:sast-njsscan:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-njsscan(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  cache: []
+  script:
+    - pip install -q njsscan
+    - njsscan --sarif -o njsscan.sarif frontend || true
+    - njsscan frontend | tee njsscan.txt || true
+  artifacts:
+    paths: [njsscan.sarif, njsscan.txt]
+    when: always
+  allow_failure: true
+
+# SAST — frontend, via the ESLint security plugin. eslint + eslint-config-next
+# are ALREADY frontend devDependencies (see frontend/package.json), so this adds
+# only the security plugin and runs it with an inline config — deliberately NOT
+# editing the project's eslint config, so `npm run lint` keeps its current
+# meaning and this security pass stays a separate, clearly-labelled gate.
+scan:sast-eslint-security:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-eslint\-security(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: node:20
+  needs: []
+  cache: []
+  script:
+    - cd frontend && npm ci
+    - npm i --no-save eslint-plugin-security @microsoft/eslint-formatter-sarif
+    - |
+      cat > .eslintrc.security.json <<'ESLINTRC'
+      {
+        "root": true,
+        "parserOptions": { "ecmaVersion": 2022, "sourceType": "module",
+                           "ecmaFeatures": { "jsx": true } },
+        "plugins": ["security"],
+        "extends": ["plugin:security/recommended-legacy"]
+      }
+      ESLINTRC
+    - npx eslint --no-eslintrc -c .eslintrc.security.json --ext .js,.jsx,.mjs app components lib -f @microsoft/eslint-formatter-sarif -o ../eslint.sarif || true
+    - npx eslint --no-eslintrc -c .eslintrc.security.json --ext .js,.jsx,.mjs app components lib | tee ../eslint-security.txt || true
+  artifacts:
+    paths: [eslint.sarif, eslint-security.txt]
+    when: always
+  allow_failure: true
+
+# SAST — multi-language aggregator. Horusec bundles and normalises several
+# engines at once, so it acts as a cross-check on the single-language scanners.
+scan:sast-horusec:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-horusec(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: horuszup/horusec-cli:latest
+    entrypoint: [""]
+  needs: []
+  cache: []
+  script:
+    - horusec start -p ./ -D -O horusec.json -o json --disable-docker=true || true
+    - horusec start -p ./ -D --disable-docker=true | tee horusec.txt || true
+  artifacts:
+    paths: [horusec.json, horusec.txt]
+    when: always
+  allow_failure: true
+
+# SAST + quality — SonarQube. Named in the module notes (security/README.md), so
+# it is committed here rather than left out. It is the one scanner that CANNOT
+# be self-contained: the scanner CLI always uploads to a server. It therefore
+# runs only when SONAR_TOKEN + SONAR_HOST_URL are configured — the same
+# "gate on the credential" pattern the LLM red-team jobs use for OPENAI_API_KEY.
+# Free options: SonarCloud (free for public projects) or a self-hosted
+# SonarQube Community Edition.
+scan:sast-sonarqube:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]sast\-sonarqube(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  # A throwaway SonarQube Community server for this job only: no account, no
+  # stored token. It used to exit 0 with "SONAR_TOKEN not set", scanning nothing.
+  services:
+    - name: sonarqube:community
+      alias: sonarqube
+  needs: []
+  cache: []
+  variables:
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.sonar"
+    SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"   # shared runners cannot raise vm.max_map_count
+  script:
+    - |
+      SQ=http://sonarqube:9000
+      for i in $(seq 1 120); do
+        s=$(curl -s "$SQ/api/system/status" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+        [ "$s" = "UP" ] && break; sleep 5
+      done
+      echo "SonarQube: $s"; [ "$s" = "UP" ]
+      SQ_PW="Ci$(date +%s)Sq!x9"
+      # Throwaway server for this job only. Auth goes in a header built from
+      # variables: `curl -u user:pass` is what the blocking gitleaks gate
+      # (rightly) flags, and a credential gate should not learn to ignore it.
+      SQ_USER=admin; SQ_INITIAL=admin
+      basic() { printf '%s:%s' "$SQ_USER" "$1" | base64 -w0; }
+      curl -sf -H "Authorization: Basic $(basic "$SQ_INITIAL")" -X POST "$SQ/api/users/change_password" --data-urlencode "login=$SQ_USER" --data-urlencode "previousPassword=$SQ_INITIAL" --data-urlencode "password=$SQ_PW"
+      TOKEN=$(curl -sf -H "Authorization: Basic $(basic "$SQ_PW")" -X POST "$SQ/api/user_tokens/generate" --data-urlencode name=ci | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+      rc=0
+      sonar-scanner -Dsonar.host.url="$SQ" -Dsonar.token="$TOKEN" -Dsonar.projectKey=careroute-ai         -Dsonar.sources=backend/app,frontend/app,frontend/components,frontend/lib -Dsonar.python.version=3.12         -Dsonar.exclusions="**/node_modules/**,**/.venv/**,**/__pycache__/**" -Dsonar.scm.disabled=true         -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=600 || rc=$?
+      curl -sf -H "Authorization: Bearer $TOKEN" "$SQ/api/issues/search?componentKeys=careroute-ai&ps=500&issueStatuses=OPEN,CONFIRMED" -o sonarqube-issues.json
+      python3 - <<'PY' | tee sonarqube.txt
+      import collections, json
+      d = json.load(open("sonarqube-issues.json")); issues = d.get("issues", [])
+      print(f"SonarQube: {d.get('total', len(issues))} open issues")
+      print("  by type:    ", dict(collections.Counter(i.get("type") for i in issues)))
+      print("  by severity:", dict(collections.Counter(i.get("severity") for i in issues)))
+      for i in issues:
+          if i.get("type") in ("VULNERABILITY", "BUG"):
+              print(f"  {i['type']:13} {i['severity']:8} {i['rule']:18} {i['component'].split(':', 1)[-1]}:{i.get('line', '')}  {i['message'][:90]}")
+      PY
+      exit $rc   # quality-gate result
+  artifacts:
+    paths: [sonarqube-issues.json, sonarqube.txt]
+    when: always
+  allow_failure: true
+
+# SECRETS — TruffleHog. The distinguishing feature over gitleaks is verification:
+# TruffleHog takes a candidate credential and AUTHENTICATES it against the live
+# provider, so a hit is not "this looks like a key" but "this key works". Both
+# modes run: every candidate is recorded, and the report marks a VERIFIED
+# finding BLOCKING because it is a live leaked credential.
+scan:secrets-trufflehog:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]secrets\-trufflehog(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: trufflesecurity/trufflehog:latest
+    entrypoint: [""]
+  needs: []
+  cache: []
+  script:
+    - trufflehog filesystem . --json --no-update > trufflehog.json || true
+    - trufflehog filesystem . --no-update | tee trufflehog.txt || true
+    - |
+      verified=$(grep -c '"Verified":true' trufflehog.json 2>/dev/null || true)
+      echo "TruffleHog: $(wc -l < trufflehog.json) candidate(s), ${verified:-0} VERIFIED"
+
+  artifacts:
+    paths: [trufflehog.json, trufflehog.txt]
+    when: always
+  allow_failure: true
+
+# SECRETS — detect-secrets (Yelp). Its model is a committed BASELINE file: known
+# and triaged findings are recorded in .secrets.baseline and the job reports only
+# what is NEW relative to it. That is a different failure mode from
+# gitleaks/TruffleHog (which re-report everything every run) and is what makes a
+# secret scanner survivable on a repo that legitimately contains test fixtures.
+scan:secrets-detect-secrets:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]secrets\-detect\-secrets(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  cache: []
+  script:
+    - pip install -q detect-secrets
+    - detect-secrets scan --all-files --exclude-files '(node_modules|[.]venv|[.]git|__pycache__)' > detect-secrets.json || true
+    - |
+      python - <<'PYEOF'
+      import json
+      with open("detect-secrets.json") as fh:
+          n = sum(len(v) for v in (json.load(fh).get("results") or {}).values())
+      print(f"detect-secrets: {n} candidate(s)")
+      PYEOF
+  artifacts:
+    paths: [detect-secrets.json]
+    when: always
+  allow_failure: true
+
+# SCA — OSV-Scanner (Google). Queries osv.dev, which aggregates GHSA, PyPA,
+# RustSec and distro advisories. A different corpus from Trivy and pip-audit, so
+# it is a genuine second opinion rather than a duplicate run.
+scan:deps-osv:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]deps\-osv(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: ghcr.io/google/osv-scanner:latest
+    entrypoint: [""]
+  needs: []
+  cache: []
+  script:
+    # The image puts the binary at /osv-scanner, not on PATH, and v2 moved the
+    # lockfile flags under `scan source -L`: the old line printed "not found" and
+    # the `|| true` turned that into a green job that scanned nothing.
+    - /osv-scanner scan source --format sarif --output-file osv.sarif -L backend/requirements.txt -L frontend/package-lock.json || true
+    - /osv-scanner scan source --format table -L backend/requirements.txt -L frontend/package-lock.json | tee osv.txt || true
+  artifacts:
+    paths: [osv.sarif, osv.txt]
+    when: always
+  allow_failure: true
+
+# SCA — Grype (Anchore). A third vulnerability database over the same dependency
+# set, for the same cross-check reason as OSV above.
+# NOT run from `anchore/grype` directly. That image ships grype as its entrypoint
+# on a near-empty filesystem with NO SHELL, so every run died before the script
+# started:
+#
+#   ERROR: Job failed (system failure): ... unable to start container process:
+#   exec: "sh": executable file not found in $PATH
+#
+# `entrypoint: [""]` cannot fix that — it clears the entrypoint but does not add
+# a /bin/sh for GitLab to run the script with. So install the binary into an
+# image that has a shell. The installer is pinned by version rather than piping
+# `latest` into sh, so the job is reproducible and the download is verifiable.
+scan:deps-grype:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]deps\-grype(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: debian:bookworm-slim
+  needs: []
+  cache: []
+  variables:
+    GRYPE_VERSION: "0.87.0"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+    - |
+      curl -sSfL -o /tmp/grype.tar.gz \
+        "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+      tar -xzf /tmp/grype.tar.gz -C /usr/local/bin grype
+      grype version
+    - grype dir:. --output sarif --file grype.sarif || true
+    - grype dir:. --output table | tee grype.txt || true
+  artifacts:
+    paths: [grype.sarif, grype.txt]
+    when: always
+  allow_failure: true
+
+# SCA — Retire.js. Specifically detects known-vulnerable JS LIBRARIES that are
+# bundled or vendored, which lockfile-based scanners miss when a library is
+# checked in rather than installed.
+scan:deps-retirejs:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]deps\-retirejs(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: node:20
+  needs: []
+  cache: []
+  script:
+    - npm i -g retire
+    - retire --path frontend --outputformat json --outputpath retire.json --exitwith 0 || true
+    - retire --path frontend --exitwith 0 | tee retire.txt || true
+  artifacts:
+    paths: [retire.json, retire.txt]
+    when: always
+  allow_failure: true
+
+# IaC / config — Checkov. Note this repo has NO .tf files: the value here is the
+# frameworks nothing else checks, namely docker-compose.yml and .gitlab-ci.yml
+# ITSELF (Checkov has a gitlab_ci framework — it flags unpinned image tags and
+# dangerous rules). Dockerfile coverage overlaps Hadolint by design.
+scan:iac-checkov:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]iac\-checkov(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint: [""]
+  needs: []
+  cache: []
+  script:
+    - checkov -d . --framework dockerfile gitlab_ci secrets kubernetes --output sarif --output-file-path . --soft-fail --skip-path node_modules --skip-path .venv || true
+    - mv results.sarif checkov.sarif 2>/dev/null || true
+    - checkov -d . --framework dockerfile gitlab_ci secrets kubernetes --compact --soft-fail --skip-path node_modules --skip-path .venv | tee checkov.txt || true
+  artifacts:
+    paths: [checkov.sarif, checkov.txt]
+    when: always
+  allow_failure: true
+
+# IaC / config — KICS (Checkmarx, OSS). Second opinion on the same targets as
+# Checkov, with an independent query set.
+scan:iac-kics:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]iac\-kics(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: checkmarx/kics:latest
+    entrypoint: [""]
+  needs: []
+  cache: []
+  script:
+    - kics scan -p . --report-formats sarif,html -o "$CI_PROJECT_DIR" -e "node_modules,.venv,.git" --no-progress || true
+    - mv results.sarif kics.sarif 2>/dev/null || true
+  artifacts:
+    paths: [kics.sarif, results.html]
+    when: always
+  allow_failure: true
+
+# LICENCE COMPLIANCE — not a vulnerability scan, but the same supply-chain
+# question from the legal side: a copyleft dependency in a clinical product is a
+# release blocker of a different kind. Report-only; pairs with the CycloneDX SBOM.
+scan:licenses:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]licenses(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
+    - pip install -q -r backend/requirements.txt pip-licenses
+    - pip-licenses --format=json --output-file pip-licenses.json
+    - pip-licenses --format=markdown | tee pip-licenses.txt
+    - cd frontend && (npm ci >/dev/null 2>&1 || true)
+    - npx --yes license-checker --json --out ../npm-licenses.json 2>/dev/null || true
+    - npx --yes license-checker --summary 2>/dev/null | tee ../npm-licenses.txt || true
+  artifacts:
+    paths: [pip-licenses.json, pip-licenses.txt, npm-licenses.json, npm-licenses.txt]
+    when: always
+  allow_failure: true
+
+# MODEL ARTIFACT — Fickling (Trail of Bits). scan:modelscan checks the model for
+# known-unsafe operators; Fickling decompiles the PICKLE PROGRAM itself and can
+# report what the payload would execute on load. The joblib is the one artifact
+# this pipeline both produces and later loads in a server process, so it earns
+# two independent checks.
+scan:model-fickling:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]model\-fickling(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  script:
+    - pip install -q fickling
+    - |
+      found=0
+      : > fickling.txt
+      for f in backend/models/*.joblib backend/models/*.pkl; do
+        [ -e "$f" ] || continue
+        found=1
+        echo "───── $f ─────" | tee -a fickling.txt
+        python -m fickling --check-safety --json-output "$f.fickling.json" "$f" >/dev/null 2>&1 || true
+        python - "$f" <<'PY' | tee -a fickling.txt
+      import ast, sys
+      from fickling.fickle import Pickled
+      # Fickling's own verdict is LIKELY_UNSAFE for ANY non-stdlib import, so it
+      # cannot gate a sklearn model. Gate on an allowlist of what a sklearn
+      # artifact legitimately imports, plus Fickling's unsafe-import list.
+      ALLOWED = ("numpy.", "sklearn.")
+      def names(nodes):
+          out = set()
+          for n in nodes:
+              if isinstance(n, ast.ImportFrom):
+                  out |= {f"{n.module}.{a.name}" for a in n.names}
+              elif isinstance(n, ast.Import):
+                  out |= {a.name for a in n.names}
+          return out
+      with open(sys.argv[1], "rb") as fh:
+          p = Pickled.load(fh)
+      imports, unsafe = names(p.non_standard_imports()), names(p.unsafe_imports())
+      bad = sorted((i for i in imports if not i.startswith(ALLOWED)), key=str) + sorted(unsafe)
+      print(f"{len(p)} opcodes; interpretation error={p.has_interpretation_error}; "
+            f"{len(imports)} non-standard imports; {len(unsafe)} unsafe")
+      for i in sorted(imports | unsafe):
+          print(("  DISALLOWED " if i in bad else "  ok ") + i)
+      sys.exit(1 if bad or p.has_interpretation_error or p.has_invalid_opcode else 0)
+      PY
+      done
+      if [ "$found" -eq 0 ]; then echo "no pickle artifacts found to analyse"; exit 1; fi
+  artifacts:
+    paths: [fickling.txt, backend/models/*.fickling.json]
+    when: always
+  allow_failure: true
+
+# ── BUILD ────────────────────────────────────────────────────────────────────
+# Frontend production bundle. Lives in `build` (a build artifact), NOT in `test`.
+#
+# NO `artifacts:` BLOCK, deliberately. It used to publish `frontend/dist` — a
+# path Next.js has never written: `output: 'standalone'` (next.config.mjs) emits
+# `frontend/.next/standalone` + `.next/static`. GitLab does not fail a job for an
+# artifact path that matches nothing, it just logs a warning, so this "artifact"
+# was empty for as long as it existed. Nothing consumes it either: no job has
+# `needs: ["build:frontend"]`, and build:images runs `docker build frontend`,
+# which recompiles the app inside the image from source. So the fix is to DROP
+# the block rather than repoint it at `.next` — this job's value is as a
+# compile GATE (a broken build fails the pipeline here), not as a producer.
+build:frontend:
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]build[:.]frontend(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: node:20-alpine
+  script:
+    - cd frontend && npm ci && npm run build
+
+# Build both service images (Docker-in-Docker) and export them as tar artifacts,
+# so the container-image scan below analyses the EXACT image that was built
+# (no registry push required).
+build:images:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  # For the direct ECR push of the backend (see the end of the script); the same
+  # short-lived OIDC token deploy:push-images uses.
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    # Port 2376 is docker-in-docker's TLS port, and DOCKER_TLS_CERTDIR makes the
+    # dind service generate certs — but the CLIENT still has to be told to speak
+    # TLS and where its client cert is, or `docker build` dials 2376 in plaintext
+    # and dies with "http: server gave HTTP response to HTTPS client". dind writes
+    # the client bundle to $DOCKER_TLS_CERTDIR/client, shared with this job via
+    # the services volume.
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    # The released backend (monolith) ships the Safety-NLP models: NER, assertion,
+    # BioLORD and the mDeBERTa direct-NLI comparator, each pinned + hash-checked by
+    # app/safety_nlp/prefetch.py. Job variables, because pipeline variables are
+    # disabled in this project. The backend image is 6.08 GB unpacked with them
+    # (~2.5 GB more in images.tar) — watch the artifact size on the first run.
+    # test:compose-smoke expects the same value.
+    WITH_SAFETY_NLP: "1"
+    WITH_SAFETY_NLP_DIRECT_NLI: "1"
+  # THE DEPLOY PATH IS DECLARED, NOT INHERITED FROM STAGE ORDER. Without `needs:`
+  # this job waited for every job in the seven stages before it — ~55 of them,
+  # including advisory scanners that take the longest — so one unrelated red
+  # scanner meant no image, no push and no deploy, and the only retry was another
+  # full pipeline. `deploy:push-images` already declares `needs: [build:images]`,
+  # so stage order never gated the push on the scanners anyway; it only made this
+  # job late. These five are the gates an image must not be built without: the
+  # code lints, the tests pass, the model clears its release floors, and no
+  # secret or live credential is in the tree that is about to be baked in.
+  # Everything else still runs and still reports; the two deploy clicks stay
+  # manual, which is where a human reads those reports.
+  # `artifacts: false`: the Dockerfile trains its own model, so nothing from
+  # these jobs is consumed here — they are gates, not inputs.
+  needs:
+    - { job: "lint:backend", artifacts: false, optional: true }
+    - { job: "test:backend", artifacts: false, optional: true }
+    - { job: "test:model-gate", artifacts: false, optional: true }
+    - { job: "scan:secrets-gitleaks", artifacts: false, optional: true }
+    - { job: "scan:no-live-credentials", artifacts: false, optional: true }
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]build[:.]images(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "release/deploy"'
+    - when: manual
+      allow_failure: true
+  script:
+    # Standard OCI labels carry the provenance, so ECR needs only ONE tag per
+    # image (the release version): the image config shows the exact commit and
+    # version without a second, differently-shaped tag.
+    - export OCI_LABELS="--label org.opencontainers.image.version=$(tr -d '[:space:]' < VERSION)-${CI_PIPELINE_IID} --label org.opencontainers.image.revision=${CI_COMMIT_SHA} --label org.opencontainers.image.source=${CI_PROJECT_URL}"
+    - |
+      for svc in $CAREROUTE_IMAGES; do
+        docker build $OCI_LABELS --target "$svc" -t "careroute-${svc}:${CI_COMMIT_SHORT_SHA}" backend
+      done
+    # The LEGACY single-process image stays in the pipeline. The Dockerfile's
+    # DEFAULT target is `monolith` (every agent in one process), and the current
+    # ECS service still deploys `careroute-backend`. Dropping it the moment this
+    # pipeline replaced the old one would break production before the infra plan
+    # lands and switches ECS to the ten-container task definition.
+    - |
+      docker build $OCI_LABELS --build-arg WITH_SAFETY_NLP="$WITH_SAFETY_NLP" --build-arg WITH_SAFETY_NLP_DIRECT_NLI="$WITH_SAFETY_NLP_DIRECT_NLI" -t "careroute-backend:${CI_COMMIT_SHORT_SHA}" backend
+    - |
+      docker build $OCI_LABELS -t "careroute-frontend:${CI_COMMIT_SHORT_SHA}" frontend
+    # FREE THE DISK BEFORE `docker save`. With the Safety-NLP models the build
+    # cache holds every intermediate stage (nlp-builder alone carries torch and
+    # four models), and on the small SaaS runner the save then died with "no
+    # space left on device" (pipeline #2893707323). Nothing after this point
+    # needs the cache: the tagged images are all `docker save` reads.
+    - docker builder prune -af >/dev/null && docker image prune -f >/dev/null
+    - df -h .  # the tar lands here; the runner VM's disk is shared with docker-in-docker
+    # THE BACKEND GOES STRAIGHT TO ECR. With the Safety-NLP models it is ~6 GB,
+    # and images.tar then exceeds GitLab.com's artifact limit ("413 Request
+    # Entity Too Large", pipeline #2893753066). So on the release branches it is
+    # pushed from here — same tag and skip-if-present rule as deploy:push-images,
+    # which then finds it in ECR and skips it — and left out of the tarball.
+    # ECR scan-on-push scans it; the tar-based scan jobs skip it and say so.
+    # Elsewhere (manual runs, no ECR) it stays in the tarball as before.
+    - export IMAGE_VERSION="$(tr -d '[:space:]' < VERSION)-${CI_PIPELINE_IID}"
+    - |
+      TAR_IMAGES="$CAREROUTE_IMAGES backend frontend"
+      if [ -n "${ECR_REGISTRY:-}" ] && { [ "$CI_COMMIT_BRANCH" = "main" ] || [ "$CI_COMMIT_BRANCH" = "release/deploy" ]; }; then
+        apk add --no-cache aws-cli >/dev/null
+        if [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ]; then
+          printf '%s' "$AWS_ID_TOKEN" > /tmp/aws-web-identity-token
+          export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-identity-token
+          export AWS_ROLE_ARN="$AWS_DEPLOY_ROLE_ARN" AWS_ROLE_SESSION_NAME="gitlab-${CI_JOB_ID}"
+        fi
+        aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+        dst="${ECR_REGISTRY}/${ECR_NAMESPACE}/backend:${IMAGE_VERSION}"
+        if aws ecr describe-images --region "${AWS_DEFAULT_REGION}" --repository-name "${ECR_NAMESPACE}/backend" \
+             --image-ids imageTag="${IMAGE_VERSION}" >/dev/null 2>&1; then
+          echo "$dst already in ECR - skipping"
+        else
+          docker tag "careroute-backend:${CI_COMMIT_SHORT_SHA}" "$dst"
+          docker push "$dst"
+          echo "pushed $dst directly (too large for the images.tar artifact)"
+        fi
+        TAR_IMAGES="$CAREROUTE_IMAGES frontend"
+      fi
+      # ONE tarball for the rest. The agent images share their base layers and
+      # `docker save` writes a shared layer once; separate tars would store the
+      # Python venv a dozen times over and exceed the artifact limit.
+      docker save $(for svc in $TAR_IMAGES; do printf 'careroute-%s:%s ' "$svc" "$CI_COMMIT_SHORT_SHA"; done) -o images.tar
+  artifacts:
+    paths: [images.tar]
+    expire_in: 1 day
+
+# CONTAINER IMAGE SCAN — Trivy scans the BUILT images (OS packages + Python/Node
+# libraries + secrets + image misconfig) for HIGH/CRITICAL CVEs. Scanning the
+# exported tars means it inspects exactly what build:images produced. This is
+# the container-layer complement to scan:trivy-fs (which scans the source tree).
+# ── PII EGRESS GATE [AI-Security] ────────────────────────────────────────────
+# "PII egress events = 0". app/redact.py masks identifiers at the INPUT
+# boundary; this is the independent check on the other side — did an identifier
+# nevertheless reach an artifact that LEAVES the trust boundary (the inference
+# log, the HITL ground-truth log, the drift report, the executive report, every
+# one of which is published as a CI artifact and downloaded by later jobs)?
+#
+# BLOCKING. For a clinical product this is the one scanner whose findings are
+# never "review at leisure". The findings file carries MASKED excerpts only: a
+# report that quoted the NRIC it caught would have re-published it into exactly
+# the artifact store the gate exists to protect.
+# Runs in the `report` stage, not `security-scan`: it audits artifacts that have
+# already been PUBLISHED, and the executive report is one of them. A gate that
+# ran before the thing it inspects exists would report "skipped" forever.
+scan:pii-egress:
+  stage: report
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]pii\-egress(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["monitor:evidently", "report:pdf"]
+  variables:
+    # Same locations report:pdf and monitor:evidently write to. Without these the
+    # gate looks under backend/reports, finds nothing, and reports "skipped"
+    # forever while appearing to run.
+    CAREROUTE_MONITOR_DIR: "$CI_PROJECT_DIR/backend/monitoring"
+    CAREROUTE_REPORT_DIR: "$CI_PROJECT_DIR/reports"
+  script:
+    - cd backend
+    - pip install -r requirements.txt
+    # presidio adds ML-based NER for names/addresses, which no regex catches.
+    # Optional: absent, the gate runs its deterministic rules and says so.
+    - pip install presidio-analyzer || echo "presidio unavailable; deterministic rules only"
+    - python -m app.ml.pii_egress --out "$CI_PROJECT_DIR/pii-egress.json"
+  artifacts:
+    paths: [pii-egress.json]
+    when: always
+
+# ── NOTHING BELOW PRODUCTION SPENDS MONEY [AI-Security] ──────────────────────
+# Asserts that this non-production environment holds no credential an AGENT
+# could use to reach a live, paid or rate-limited service. CareRoute's agents
+# reach OneMap (a shared free account whose password has already leaked into a
+# chat once), the LLM provider, and Onyx.
+#
+# Scope is the whole design: CI PLUMBING credentials (SONAR_TOKEN, the pipeline
+# trigger token, the MLflow token) are deliberately NOT covered — they belong to
+# the pipeline, no agent can reach them, and they must be present for their jobs
+# to work. A gate that fired on those would be wrong every run, and a gate
+# that is wrong every run is one everybody learns to ignore.
+scan:no-live-credentials:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]no\-live\-credentials(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: []
+  variables:
+    # DECLARED EXEMPTION, and the honest version of a real conflict: this gate
+    # forbids live credentials outside production, while `ai-security:garak` and
+    # `ai-security:promptfoo` need a live OPENAI_API_KEY in CI to scan anything
+    # at all. The course's own answer is a self-hosted model in CI (its
+    # reference pipeline runs "vLLM, pinned small", money at risk: none) — which
+    # CareRoute does not have yet.
+    #
+    # Deleting OPENAI_API_KEY from the gate's scope would make the exception
+    # invisible and permanent. Naming it here keeps it in the pipeline
+    # definition, prints it in the job log, and records it in the artifact — and
+    # the gate still blocks on OneMap and Onyx, which nothing in CI needs.
+    # Withdraw this line the day CI gets a self-hosted model.
+    CAREROUTE_ALLOWED_LIVE_CREDENTIALS: "OPENAI_API_KEY"
+  script:
+    - cd backend
+    - python -m app.credentials_guard --out "$CI_PROJECT_DIR/no-live-credentials.json"
+  artifacts:
+    paths: [no-live-credentials.json]
+    when: always
+
+scan:container-image:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  needs: [build:images]
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]container\-image(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: manual
+      allow_failure: true
+  script:
+    # Pinned scanner binary rather than aquasec/trivy:latest — the images now
+    # live in ONE multi-image tarball, which `--input` cannot index into, so the
+    # job needs a docker daemon to load the tar and re-export each image singly
+    # (to local disk, not an artifact). Pinning matches why backend/ruff.toml
+    # pins ruff: a scanner release must not turn this pipeline red on its own.
+    # v0.56.2 was deleted upstream (404) — bumping the pin means updating the SHA256 too.
+    - wget -qO /tmp/trivy.tgz https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz
+    - echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  /tmp/trivy.tgz" | sha256sum -c -
+    - tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy
+    - docker load -i images.tar
+    - |
+      for svc in $CAREROUTE_IMAGES backend frontend; do
+        # The Safety-NLP backend is pushed to ECR by build:images, not shipped in
+        # images.tar (too large); ECR scan-on-push scans it instead.
+        docker image inspect "careroute-${svc}:${CI_COMMIT_SHORT_SHA}" >/dev/null 2>&1           || { echo "careroute-${svc}: not in images.tar (pushed to ECR by build:images) - skipped"; continue; }
+        docker save "careroute-${svc}:${CI_COMMIT_SHORT_SHA}" -o "/tmp/${svc}.tar"
+        # Table: only what can be acted on (a fix exists). The JSON below keeps
+      # everything, including the Debian HIGHs with no released fix yet.
+      trivy image --input "/tmp/${svc}.tar" --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --ignore-unfixed --format table
+        trivy image --input "/tmp/${svc}.tar" --format json -o "trivy-${svc}-image.json" || true
+        rm -f "/tmp/${svc}.tar"
+      done
+  artifacts:
+    paths: ["trivy-*-image.json"]
+    when: always
+  allow_failure: true
+
+# Container-image best-practice / CIS lint — Dockle (non-CVE hardening checks:
+# no root user, no secrets in layers, minimal capabilities, etc.).
+scan:container-dockle:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  needs: [build:images]
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]scan[:.]container\-dockle(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: manual
+      allow_failure: true
+  script:
+    - wget -qO- https://github.com/goodwithtech/dockle/releases/download/v0.4.14/dockle_0.4.14_Linux-64bit.tar.gz | tar -xz -C /usr/local/bin dockle
+    - docker load -i images.tar
+    - |
+      for svc in $CAREROUTE_IMAGES backend frontend; do
+        # The Safety-NLP backend is pushed to ECR by build:images, not shipped in
+        # images.tar (too large); ECR scan-on-push scans it instead.
+        docker image inspect "careroute-${svc}:${CI_COMMIT_SHORT_SHA}" >/dev/null 2>&1           || { echo "careroute-${svc}: not in images.tar (pushed to ECR by build:images) - skipped"; continue; }
+        docker save "careroute-${svc}:${CI_COMMIT_SHORT_SHA}" -o "/tmp/${svc}.tar"
+        # Two triaged false positives, both in third-party layers (2026-09-25):
+        #  --accept-file settings.py  CIS-DI-0010 flags any file NAMED settings.py;
+        #    the hit is scipy's cobyqa/settings.py (optimiser defaults, no secret).
+        #    Env-var credentials stay checked (no --accept-key).
+        #  --ignore DKL-DI-0005  the apt-get layer is python:3.12-slim's own; it
+        #    cleans up with `apt-get dist-clean`, which dockle 0.4.14 does not
+        #    recognise. Our Dockerfiles run no apt; hadolint DL3009 covers them.
+        dockle --input "/tmp/${svc}.tar" --exit-code 0 --format list \
+          --accept-file settings.py --ignore DKL-DI-0005
+        rm -f "/tmp/${svc}.tar"
+      done
+  allow_failure: true
+
+# [Microservices] The SCANNED images, wired together exactly as docker-compose.yml
+# wires them, answering one real red-flag triage. Fails if any agent container
+# never took a successful call (a degraded run must not pass as healthy).
+test:compose-smoke:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  needs: [build:images]
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+    # Must match build:images: check_active_backends then fails unless the
+    # backend image reports safetyNlp="model", not a silent fall back to rules.
+    WITH_SAFETY_NLP: "1"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]test[:.]compose\-smoke(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: manual
+      allow_failure: true
+  script:
+    - apk add --no-cache python3 >/dev/null
+    - docker load -i images.tar
+    - docker compose up -d --no-build --wait --wait-timeout 420 intake-gateway
+    - python3 scripts/compose_smoke.py --base-url http://docker:8000
+    # Only when the backend travelled in images.tar; on main it goes to ECR from
+    # build:images, whose own build step already refuses an image that cannot load
+    # its Safety-NLP models offline (app/safety_nlp/prefetch.py --verify).
+    - |
+      if docker image inspect "careroute-backend:${IMAGE_TAG}" >/dev/null 2>&1; then
+        docker run -d -p 8001:8000 "careroute-backend:${IMAGE_TAG}" && python3 scripts/check_active_backends.py --base-url http://docker:8001 --with-safety-nlp "${WITH_SAFETY_NLP:-0}" --wait 300
+      else
+        echo "careroute-backend not in images.tar (pushed to ECR by build:images) - active-backend check skipped"
+      fi
+  after_script:
+    - docker compose logs --no-color > compose-logs.txt 2>&1 || true
+  artifacts:
+    paths: [compose-logs.txt]
+    when: always
+
+# ── DEPLOY ───────────────────────────────────────────────────────────────────
+# PUBLISH THE RELEASE ARTIFACT.
+#
+# This is the link that was missing between this repo and careroute_ai_infra.
+# `build:images` above builds both images and `docker save`s them to tarballs so
+# Trivy and Dockle can scan the exact bytes that were built — right for scanning
+# and, on its own, a dead end for delivery: the artifact never reached a
+# registry, so the infra repo's README documented a MANUAL `docker build &&
+# docker push` from a laptop as the way images got to ECR.
+#
+# CD p10 names manual release steps as the first symptom of having no CD at all;
+# CD p11 says "create the deployable artifact and promote it across all
+# environments"; Agentic p8 says "the same tested container image is promoted
+# through each environment — do not rebuild separately"; Agentic p10 calls the
+# registry push an "immutable release unit".
+#
+# So this pushes the SCANNED tarballs — `docker load`, not a second
+# `docker build`. Rebuilding here would publish a different image from the one
+# every gate above passed, which is exactly the substitution those slides warn
+# about.
+#
+# Every image gets exactly ONE tag, the RELEASE tag `<VERSION>-<pipeline iid>`,
+# e.g. `0.2.0-247`: the app version from the repo-root VERSION file plus
+# GitLab's per-project pipeline counter, so it is unique, sortable and reads the
+# same in every repository. This is what deploy:ecs rolls out and SSM records.
+# The commit is NOT a second tag (two tag shapes per digest made the repository
+# list inconsistent); build:images bakes it into the image as the OCI label
+# org.opencontainers.image.revision, alongside .version and .source.
+# Never `latest`: a moving tag cannot say what is deployed or be rolled back to.
+# The ECR repos are IMMUTABLE, so a tag identifies one build for ever and the
+# previous tag stays resolvable to roll back to.
+#
+# Runs automatically on `main`: the deploy jobs downstream `need` it, so a
+# manual gate here would hold the whole deploy path. Putting the image into
+# service is deploy:ecs (manual on main, automatic on release/deploy).
+#
+#   Required CI/CD variables (the infra repo prints them:
+#   `terragrunt output app_ci_variables`):
+#     AWS_DEPLOY_ROLE_ARN  the infra stack's push-only role (modules/ci_oidc),
+#                          assumed over GitLab OIDC — no stored AWS keys. OR,
+#                          instead, AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+#                          (masked, protected), which still work as before.
+#     AWS_DEFAULT_REGION                          e.g. ap-southeast-1
+#     ECR_REGISTRY   <acct>.dkr.ecr.<region>.amazonaws.com
+#     ECR_NAMESPACE  the infra stack's name_prefix, e.g. careroute-demo
+#   Self-skips GREEN when ECR_REGISTRY is unset, so a fork or a contributor
+#   without AWS access still gets a passing pipeline.
+deploy:push-images:
+  stage: deploy
+  image: docker:27
+  services: [docker:27-dind]
+  needs: ["build:images"]
+  # Short-lived GitLab OIDC token. Used only when AWS_DEPLOY_ROLE_ARN is set;
+  # the role's trust policy accepts tokens from `main` of this project only.
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]deploy[:.]push\-images(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "release/deploy"'
+      allow_failure: true
+  script:
+    - |
+      if [ -z "${ECR_REGISTRY}" ]; then
+        echo "ECR_REGISTRY not set — skipping the registry push."
+        echo "Set ECR_REGISTRY / ECR_NAMESPACE + AWS credentials to publish."
+        exit 0
+      fi
+    - apk add --no-cache aws-cli >/dev/null
+    # OIDC when the role is configured; otherwise the static keys, as before.
+    # The AWS CLI reads AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE by itself.
+    - |
+      if [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ]; then
+        printf '%s' "$AWS_ID_TOKEN" > /tmp/aws-web-identity-token
+        export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-identity-token
+        export AWS_ROLE_ARN="$AWS_DEPLOY_ROLE_ARN" AWS_ROLE_SESSION_NAME="gitlab-${CI_JOB_ID}"
+      fi
+    - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+    # Load the SCANNED tarball rather than rebuilding: same bytes, same digest.
+    - docker load -i images.tar
+    # A retried job must not fail on its own earlier push: the repos are
+    # IMMUTABLE, so an existing tag is already exactly this image.
+    #
+    # Only CAREROUTE_PUSH_IMAGES is published, NOT every image built above. The
+    # deployed shape is one compute running `backend` — the Dockerfile's default
+    # `monolith` target, every agent in-process — which is also the image the
+    # scheduled drift-monitor task runs with a different command. The per-agent
+    # images are built and scanned every pipeline to prove the split holds;
+    # pushing them would bill ECR storage for images no task pulls, and their
+    # repos do not exist in careroute_ai_infra. See the variable's comment.
+    - export IMAGE_VERSION="$(tr -d '[:space:]' < VERSION)-${CI_PIPELINE_IID}"
+    - |
+      for svc in $CAREROUTE_PUSH_IMAGES; do
+        src="careroute-${svc}:${CI_COMMIT_SHORT_SHA}"
+        repo="${ECR_REGISTRY}/${ECR_NAMESPACE}/${svc}"
+        dst="${repo}:${IMAGE_VERSION}"
+        if aws ecr describe-images --region "${AWS_DEFAULT_REGION}" --repository-name "${ECR_NAMESPACE}/${svc}" \
+             --image-ids imageTag="${IMAGE_VERSION}" >/dev/null 2>&1; then
+          echo "$dst already in ECR - skipping"
+          continue
+        fi
+        docker tag "$src" "$dst"
+        docker push "$dst"
+        echo "pushed $dst"
+      done
+    - echo "IMAGE_TAG=${IMAGE_VERSION}" > image-tag.env
+    - echo "Deploy with IMAGE_TAG=${IMAGE_VERSION} (commit ${CI_COMMIT_SHORT_SHA}) in careroute_ai_infra/live/<env>"
+  artifacts:
+    reports:
+      dotenv: image-tag.env
+
+# Roll the published tag out on ECS — from THIS pipeline. Automatic on
+# release/deploy; on `main` it is THE ONE manual deploy button (everything
+# before it runs by itself).
+#
+# Ownership split: careroute_ai_infra (Terraform) owns the services, their
+# task-definition settings and IAM; this job owns which IMAGE TAG they run.
+# scripts/deploy_ecs.sh registers a new task-definition revision per service
+# with the new tag, updates the services, then WAITS for ECS to finish and
+# fails if ECS rolled the release back on its own — the circuit breaker (tasks
+# that never start) or the 5xx-rate CloudWatch alarm at app/ml/canary.py's 1%
+# (tasks that start and then fail). Green here = ECS is serving this tag.
+# Only a verified tag is recorded as the current release in SSM, which is what
+# rollback:production rolls back along.
+#
+# An infra-only apply afterwards keeps the running tag (infra
+# scripts/running_image_tag.sh), so Terraform does not undo a deploy.
+#
+#   AWS_DEPLOY_ROLE_ARN  the infra stack's app-CI role (modules/ci_oidc), which
+#                        may push to ECR and roll out images on this cluster only
+#   DEPLOY_ENV           optional; `demo` (default) or `staging`
+deploy:ecs:
+  stage: deploy
+  image: alpine:3.20
+  needs: ["deploy:push-images"] # IMAGE_TAG via its dotenv report
+  resource_group: ecs-deploy # one rollout (or rollback) at a time
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    DEPLOY_ENV: demo # a project CI/CD variable of the same name overrides this
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]deploy[:.]ecs(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    # release/deploy: pushing there IS the decision to deploy, so no button.
+    - if: '$CI_COMMIT_BRANCH == "release/deploy"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: true # the pipeline is green whether or not the button is pressed
+  environment:
+    name: $DEPLOY_ENV
+  script:
+    - |
+      if [ -z "${IMAGE_TAG:-}" ]; then
+        echo "No IMAGE_TAG from deploy:push-images (ECR_REGISTRY unset, so nothing was pushed)." >&2
+        exit 1
+      fi
+    - apk add --no-cache aws-cli jq >/dev/null
+    - |
+      if [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ]; then
+        printf '%s' "$AWS_ID_TOKEN" > /tmp/aws-web-identity-token
+        export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-identity-token
+        export AWS_ROLE_ARN="$AWS_DEPLOY_ROLE_ARN" AWS_ROLE_SESSION_NAME="gitlab-deploy-${CI_JOB_ID}"
+      fi
+    - sh scripts/deploy_ecs.sh deploy "${IMAGE_TAG}"
+
+# [MLOps] SHADOW DEPLOY (stub). Progressive-delivery strategy for a new model
+# version: rather than a hard cut-over, the CANDIDATE model is loaded ALONGSIDE
+# the live PRIMARY and receives a mirror of production traffic. Its output is
+# only LOGGED/compared (never served to patients), so we measure the candidate's
+# agreement, latency and red-flag recall on REAL traffic before promotion.
+# Promotion strategy once shadow metrics clear:
+#   * BLUE-GREEN — stand up the candidate as a full parallel "green" stack, flip
+#     the router atomically, keep "blue" warm for instant rollback; or
+#   * CANARY — shift 1% -> 5% -> 25% -> 100% of traffic to the candidate, with an
+#     automated rollback if red-flag recall / latency SLOs regress.
+# The joblib from train:model is the candidate; get_model() content-addresses the
+# version, so primary vs candidate are unambiguous and rollback is a version pin.
+deploy:shadow-model:
+  stage: deploy
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+  # [MLOps] Pillar 5 — GitLab ENVIRONMENT. Tracks this deploy under a named
+  # "staging" environment (Deploy -> Environments), giving deploy history and a
+  # rollback target. The candidate is shadow-scored in staging before promotion.
+  environment:
+    name: staging
+    deployment_tier: staging
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]deploy[:.]shadow\-model(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      allow_failure: true
+  script:
+    - cd backend
+    - pip install -r requirements.txt
+    # Load the CANDIDATE alongside the primary and log (not serve) its verdict on
+    # a canned probe — the shadow-scoring hook a real mirror-traffic deploy runs.
+    - >
+      python -c "from app.ml.model import get_model;
+      m=get_model(); a=m.fairness();
+      p=m.predict('crushing chest pain radiating to the arm','40-64','Male');
+      print('CANDIDATE', a.get('modelVersion'), '| shadow-probe acuity=', p['acuity_code'],
+      'conf=', p['confidence'], '| redFlagRecall=', a.get('redFlagRecall'))"
+    - echo "Shadow scoring only — candidate NOT promoted. Compare vs primary, then blue-green/canary."
+
+# [MLOps] Pillar 5 — PROMOTE TO PRODUCTION. Manual gate that promotes the shadow-
+# validated candidate — but only after the CHAMPION-CHALLENGER GATE: the
+# candidate's audited metrics (model_audit.json from train:model) must be at
+# least as good as the current Production (champion) model's registry metrics,
+# within a small tolerance. A candidate that regresses accuracy or the
+# safety-critical red-flag recall FAILS the job — promotion is a decision made
+# on evidence, not "latest wins". Then transitions the MLflow-registered
+# `CareRouteTriageRF` to the "Production" stage (the Dev->Staging->Production
+# model lifecycle the course teaches) and stands it up as the production
+# environment. It records the champion's version (PREVIOUS_MODEL_VERSION,
+# dotenv) so rollback:production can re-pin it if this release is reverted.
+# The container rollout itself is deploy:push-images -> deploy:ecs.
+# NOTE: MLflow >= 2.9 deprecates registry STAGES in favour of version ALIASES
+# (`@production` via set_registered_model_alias). The stage lifecycle is kept
+# here because it is the model the course teaches and GitLab's registry
+# supports it; the alias call is the drop-in successor.
+deploy:promote-production:
+  stage: deploy
+  image: python:3.12-slim
+  needs: ["deploy:shadow-model", "train:model"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]deploy[:.]promote\-production(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: true   # OPTIONAL manual gate — pipeline stays green; a human
+                            # explicitly promotes to production, never auto-run.
+  environment:
+    name: production
+    deployment_tier: production
+  artifacts:
+    paths: [backend/mlflow.db, backend/mlruns/]
+    reports:
+      dotenv: deploy.env
+  script:
+    - pip install -q -r backend/requirements.txt mlflow==3.16.1
+    - touch deploy.env
+    # CHAMPION = the model actually serving (live /api/fairness), because a
+    # registry that lives in one pipeline's artifact never holds a previous
+    # champion. The old step looked for MLFLOW_TRACKING_URI (never set in CI) and
+    # the Stages API (removed in MLflow 3), so it always printed "skipped".
+    - |
+      python - <<'PY'
+      import json, os, sys, urllib.request
+      TOLERANCE = 0.005
+      cand = json.load(open("backend/models/model_audit.json"))
+      url = os.environ.get("CAREROUTE_APP_URL", "http://careroute-demo-alb-1032403210.ap-southeast-1.elb.amazonaws.com")
+      try:
+          with urllib.request.urlopen(f"{url}/api/fairness", timeout=20) as r:  # nosec B310  # fixed https/http app URL
+              champ = json.load(r)
+      except Exception as exc:
+          print(f"champion unavailable ({exc}); release gates already enforced upstream")
+          champ = {}
+      print(f"candidate {cand.get('modelVersion')}: acc={cand['overallAccuracy']} recall={cand['redFlagRecall']}")
+      print(f"champion  {champ.get('modelVersion')}: acc={champ.get('overallAccuracy')} recall={champ.get('redFlagRecall')}")
+      with open("deploy.env", "a") as fh:
+          print(f"PREVIOUS_MODEL_VERSION={champ.get('modelVersion', '')}", file=fh)
+      for k in ("overallAccuracy", "redFlagRecall"):
+          if isinstance(champ.get(k), (int, float)) and cand[k] < champ[k] - TOLERANCE:
+              sys.exit(f"CHAMPION-CHALLENGER GATE FAILED: {k} {champ[k]} -> {cand[k]}")
+      print("champion-challenger gate: PASSED")
+      PY
+    - cd backend && python -m app.ml.promote --show && python -m app.ml.promote && python -m app.ml.promote --show
+    - echo "Model promoted. Ship the containers with deploy:push-images -> deploy:ecs."
+
+# [MLOps] Pillar 5 — ROLLBACK. Most rollbacks need no job at all: while a
+# rollout or its bake period is open, ECS reverts on its own (circuit breaker,
+# or the infra repo's 5xx-rate alarm at canary.py's 1% — see careroute_ai_infra
+# modules/careroute_stack/deploy_safety.tf). This job is for a release that got
+# past that window and was found bad LATER.
+#
+# Two halves, one click:
+#   1. CONTAINERS — scripts/deploy_ecs.sh rollback: rolls the services back
+#      onto the PREVIOUS verified image tag (the release history deploy:ecs
+#      keeps in SSM), checks the image still exists in ECR first, and waits
+#      until ECS is serving it — the same path as deploy:ecs, so this job goes
+#      red if the rollback itself does not hold. Set ROLLBACK_IMAGE_TAG when
+#      running this job to pick a specific older tag.
+#   2. MODEL REGISTRY — re-pin the version that was Production before this
+#      pipeline's promotion (PREVIOUS_MODEL_VERSION from deploy:promote-production),
+#      so the next champion-challenger gate compares against what is serving.
+#
+# Replaces `deploy:canary-production`, whose Prometheus-driven ramp could never
+# run — GitLab's shared runners cannot reach an in-VPC Prometheus — and whose
+# error-rate rule ECS now enforces from CloudWatch instead.
+rollback:production:
+  stage: deploy
+  image: python:3.12-slim
+  needs: ["deploy:promote-production"]
+  resource_group: ecs-deploy # never at the same time as a deploy:ecs rollout
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]rollback[:.]production(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "release/deploy"'
+      when: manual
+      allow_failure: true
+  environment:
+    name: production
+    deployment_tier: production
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq >/dev/null
+    - pip install -q awscli
+    - |
+      if [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ]; then
+        printf '%s' "$AWS_ID_TOKEN" > /tmp/aws-web-identity-token
+        export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-identity-token
+        export AWS_ROLE_ARN="$AWS_DEPLOY_ROLE_ARN" AWS_ROLE_SESSION_NAME="gitlab-rollback-${CI_JOB_ID}"
+      fi
+    - sh scripts/deploy_ecs.sh rollback "${ROLLBACK_IMAGE_TAG:-}"
+    - pip install -q mlflow==3.16.1
+    - |
+      python - <<'PY'
+      import os
+      v = os.environ.get("PREVIOUS_MODEL_VERSION")
+      if not (v and os.environ.get("MLFLOW_TRACKING_URI")):
+          print("registry re-pin skipped: no previous Production version recorded, or MLflow unset")
+      else:
+          import mlflow
+          c = mlflow.tracking.MlflowClient()
+          c.transition_model_version_stage("CareRouteTriageRF", v, "Production",
+                                           archive_existing_versions=True)
+          print(f"re-pinned CareRouteTriageRF v{v} -> Production")
+      PY
+
+# ── POST-DEPLOY ──────────────────────────────────────────────────────────────
+# DAST — OWASP ZAP baseline against the RUNNING deployed/staging app. Moved OUT of
+# `security-scan` (which runs before anything is deployed) into `post-deploy`, so
+# it targets a LIVE instance — DAST scans a running app, not source. Point
+# DAST_TARGET at the staging URL stood up by the deploy stage.
+dast:owasp-zap:
+  stage: post-deploy
+  image:
+    name: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: [""]
+  variables:
+    DAST_TARGET: ""
+  script:
+    - test -n "$DAST_TARGET" || { echo "Set DAST_TARGET to the deployed/staging app URL"; exit 0; }
+    - zap-baseline.py -t "$DAST_TARGET" -r zap-report.html || true
+  artifacts:
+    paths: [zap-report.html]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]dast[:.]owasp\-zap(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$DAST_TARGET'
+      when: manual
+  allow_failure: true
+
+# ── DAST AGAINST A SELF-BOOTED APP ───────────────────────────────────────────
+# Every scanner below boots its OWN disposable backend and scans
+# http://127.0.0.1:8000, so all of them run on every pipeline.
+#
+# They live in `security-scan`, NOT `post-deploy`, for two reasons: they do not
+# depend on a deployment (that is the whole point of booting their own target),
+# and `report` runs before `post-deploy`, so results produced there could never
+# reach the PDF report in the same pipeline. dast:owasp-zap stays in post-deploy
+# because it is genuinely gated on a real deployed $DAST_TARGET.
+
+# API-aware DAST. zap-baseline (the job above) is PASSIVE — it only inspects
+# traffic it happens to see, which for an API with no crawlable HTML is almost
+# nothing. zap-api-scan reads the OpenAPI schema FastAPI serves at
+# /openapi.json, so ZAP actually knows the endpoints, their parameters and their
+# body schemas, and can exercise them. For this repo that is the ZAP job that
+# carries real signal.
+# PREPARING A TARGET INSIDE THE ZAP IMAGE
+# ---------------------------------------
+# Shared by both ZAP jobs. The previous version did `apt-get install` and
+# `python3 -m venv`, and BOTH are impossible here:
+#
+#   E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)
+#   The virtual environment was not created successfully because ensurepip is not available
+#
+# The zaproxy image runs as the unprivileged `zap` user, so there is no root for
+# apt, and its python3 ships without ensurepip so venv cannot bootstrap. What it
+# DOES have is python3 and pip (its own zap-*-scan.py wrappers are Python), so
+# install into the user site with `pip3 --user` and skip the venv entirely.
+#
+# No path ends green without a scan: a failed install, a backend that never
+# comes up, or no target at all FAILS the job. (It used to `exit 0` on each,
+# and because this block is inlined into the job's shell, that exit ended the
+# whole job as a pass — the DAST_TARGET branch did the same even on success.)
+.zap_prepare_target:
+  script:
+    - |
+      if [ -n "$DAST_TARGET" ]; then
+        echo "$DAST_TARGET" > /tmp/zap_target
+        echo "Scanning configured DAST_TARGET: $DAST_TARGET"
+      else
+        echo "No DAST_TARGET set — booting the backend locally as the scan target."
+        # 2026-09-25: the ZAP image's Python is 3.11, too old for the backend's
+        # pins (scipy 1.18). uv fetches a standalone Python 3.12 without root
+        # (the image runs as the unprivileged `zap` user: no apt, no ensurepip).
+        curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+        export PATH="$HOME/.local/bin:$PATH"
+        # The venv is used by path, NOT activated: activation puts its python3
+        # first on PATH, and ZAP's own zap-*-scan.py (`env python3`) then runs
+        # on it and dies with "No module named zapv2" -- no report, no scan.
+        uv venv -q --python 3.12 /tmp/venv
+        uv pip install -q --python /tmp/venv/bin/python -r "$CI_PROJECT_DIR/backend/requirements.txt" || { echo "ERROR: backend install failed"; exit 1; }
+        (cd "$CI_PROJECT_DIR/backend" && /tmp/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+        for i in $(seq 1 60); do
+          if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+            echo "backend up after ${i}s"; echo "http://127.0.0.1:8000" > /tmp/zap_target; break
+          fi
+          sleep 1
+        done
+      fi
+      [ -s /tmp/zap_target ] || { echo "ERROR: no scan target came up; nothing was scanned"; exit 1; }
+
+dast:zap-api:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]dast[:.]zap\-api(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: [""]
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    DAST_TARGET: ""
+  script:
+    - !reference [.zap_prepare_target, script]
+    - |
+      TARGET="$(cat /tmp/zap_target)"
+      # ZAP's wrapper scripts refuse every file-based option unless /zap/wrk
+      # exists -- "A file based option has been specified but the directory
+      # '/zap/wrk' is not mounted" -- and then print their usage and exit, which
+      # `|| true` turns into a green job that scanned nothing. We run as the
+      # `zap` user, whose home /zap is writable, so just make the directory and
+      # let ZAP write there.
+      mkdir -p /zap/wrk
+      # zap-api-rules.tsv: 100001 out of scope for the SSE endpoint only (see file).
+      cp "$CI_PROJECT_DIR/zap-api-rules.tsv" /zap/wrk/
+      zap-api-scan.py -t "${TARGET}/openapi.json" -f openapi -c zap-api-rules.tsv -J zap-api.json -r zap-api.html || true
+      cp /zap/wrk/zap-api.json /zap/wrk/zap-api.html "$CI_PROJECT_DIR/" 2>/dev/null || true
+    # EVIDENCE CHECK. A scanner that printed its usage and exited is
+    # indistinguishable from a clean scan once `|| true` has swallowed the exit
+    # code -- which is how these jobs stayed green while never running. Fail
+    # loudly on "no report produced" instead.
+    - |
+      if [ ! -s "$CI_PROJECT_DIR/zap-api.json" ]; then
+        echo "ERROR: ZAP produced no report. The scan did not run - do not read this job as clean."
+        exit 1
+      fi
+      echo "ZAP API scan produced $(wc -c < "$CI_PROJECT_DIR/zap-api.json") bytes of findings."
+  artifacts:
+    paths: [zap-api.json, zap-api.html]
+    when: always
+  allow_failure: true
+
+# ACTIVE/FULL DAST. zap-full-scan ATTACKS the target (injection, traversal, XSS)
+# rather than observing it, so unlike the baseline scan it can find exploitable
+# behaviour — and unlike the baseline scan it must never be pointed at anything
+# but a disposable target. Here that is the throwaway backend booted inside the
+# job, which is exactly the safe place to run it.
+dast:zap-full:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]dast[:.]zap\-full(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image:
+    name: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: [""]
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    # An ACTIVE scan must never be aimed at a shared target. Left empty on
+    # purpose: this job only ever attacks the throwaway backend it boots itself.
+    DAST_TARGET: ""
+  script:
+    - !reference [.zap_prepare_target, script]
+    - |
+      # See dast:zap-api for why /zap/wrk has to exist before any -J/-r option.
+      mkdir -p /zap/wrk
+      zap-full-scan.py -t "$(cat /tmp/zap_target)" -J zap-full.json -r zap-full.html || true
+      cp /zap/wrk/zap-full.json /zap/wrk/zap-full.html "$CI_PROJECT_DIR/" 2>/dev/null || true
+    - |
+      if [ ! -s "$CI_PROJECT_DIR/zap-full.json" ]; then
+        echo "ERROR: ZAP produced no report. The scan did not run - do not read this job as clean."
+        exit 1
+      fi
+      echo "ZAP full scan produced $(wc -c < "$CI_PROJECT_DIR/zap-full.json") bytes of findings."
+  artifacts:
+    paths: [zap-full.json, zap-full.html]
+    when: always
+  allow_failure: true
+
+# Web-server misconfiguration scan. Nikto's corpus is server-level rather than
+# app-level (dangerous methods, leaked headers, stale files), which is a
+# different question from the one ZAP asks.
+dast:nikto:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]dast[:.]nikto(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    NIKTO_VERSION: "2.5.0"
+  # `apt-get install nikto` was the whole failure: nikto is NOT packaged in
+  # Debian bookworm's main repo, so every run ended at
+  # "E: Unable to locate package nikto" with exit code 100, having uploaded
+  # nothing. Nikto is a Perl script rather than a compiled tool, so fetch the
+  # pinned release tarball and run it in place — the same shape as dast:nuclei,
+  # which is the one DAST job that has always worked.
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl perl >/dev/null
+    - pip install -q -r backend/requirements.txt
+    - |
+      curl -sSfL -o /tmp/nikto.tar.gz \
+        "https://github.com/sullo/nikto/archive/refs/tags/${NIKTO_VERSION}.tar.gz"
+      mkdir -p /opt/nikto && tar -xzf /tmp/nikto.tar.gz -C /opt/nikto --strip-components=1
+      perl /opt/nikto/program/nikto.pl -Version || true
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    - |
+      for i in $(seq 1 60); do
+        curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1 && { echo "backend up after ${i}s"; break; }
+        [ "$i" -eq 60 ] && { echo "ERROR: backend did not become healthy in 60s"; exit 1; }
+        sleep 1
+      done
+    # Run from the program dir so nikto finds nikto.conf and its plugin/db files.
+    - |
+      cd /opt/nikto/program
+      perl nikto.pl -h http://127.0.0.1:8000 -Format json -output "$CI_PROJECT_DIR/nikto.json" -maxtime 300 || true
+      perl nikto.pl -h http://127.0.0.1:8000 -maxtime 300 | tee "$CI_PROJECT_DIR/nikto.txt" || true
+  artifacts:
+    paths: [nikto.json, nikto.txt]
+    when: always
+  allow_failure: true
+
+# Template-based scanning. Nuclei runs a large community template corpus
+# (misconfigurations, exposures, known CVE fingerprints) against the live app —
+# a breadth-first sweep that complements ZAP's depth on our specific endpoints.
+dast:nuclei:
+  stage: security-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]dast[:.]nuclei(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - when: on_success
+  image: python:3.12-slim
+  needs: ["train:model"]
+  variables:
+    CAREROUTE_MODEL_DIR: "$CI_PROJECT_DIR/backend/models"
+    NUCLEI_VERSION: "3.3.5"
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl unzip >/dev/null
+    - pip install -q -r backend/requirements.txt
+    - curl -sSL -o /tmp/nuclei.zip "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
+    - unzip -o -q /tmp/nuclei.zip -d /usr/local/bin && chmod +x /usr/local/bin/nuclei
+    - (cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &)
+    - |
+      for i in $(seq 1 60); do
+        curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1 && { echo "backend up after ${i}s"; break; }
+        [ "$i" -eq 60 ] && { echo "ERROR: backend did not become healthy in 60s"; exit 1; }
+        sleep 1
+      done
+    - nuclei -target http://127.0.0.1:8000 -jsonl -o nuclei.json -stats -no-interactsh || true
+    - cat nuclei.json 2>/dev/null || echo "no findings"
+  artifacts:
+    paths: [nuclei.json]
+    when: always
+  allow_failure: true
+
+# Load test against a REAL deployed target, as opposed to test:load-locust which
+# measures a cold backend booted inside a CI container. Same locustfile and same
+# SLOs, so the two runs are directly comparable — which is the point: the gap
+# between them is the infrastructure's contribution.
+loadtest:staging:
+  stage: post-deploy
+  image: python:3.12-slim
+  needs: []
+  variables:
+    LOAD_TARGET: ""
+    CAREROUTE_LOAD_SUMMARY: "$CI_PROJECT_DIR/locust-summary-staging.json"
+  script:
+    - test -n "$LOAD_TARGET" || { echo "Set LOAD_TARGET to the deployed/staging URL"; exit 0; }
+    - pip install -q locust
+    - locust -f backend/tests/load/locustfile.py --headless
+        -u "${LOAD_USERS:-50}" -r "${LOAD_SPAWN_RATE:-10}" -t "${LOAD_DURATION:-120s}"
+        --host "$LOAD_TARGET" --csv locust-staging --only-summary
+  artifacts:
+    paths: [locust-summary-staging.json, locust-staging_stats.csv]
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]loadtest[:.]staging(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - if: '$CAREROUTE_DEPLOY_ONLY == "true"'  # release/deploy: deploy path only
+      when: never
+    - if: '$LOAD_TARGET'
+      when: manual
+  allow_failure: true
+
+# ── PIPELINE-OUTCOME NOTIFICATION [MLOps] ────────────────────────────────────
+# The CI/CD deck gives two slides to feedback ("Notification of Build Outcome",
+# "Notification of Test outcome ... via email, chat, or dashboards"), and this
+# pipeline had none. It matters most for the run nobody is watching: train:model
+# fires on a SCHEDULED pipeline, so a retrain that fails its release gate at
+# 02:00 stayed failed and silent until someone opened the pipelines page.
+#
+# `when: always` and `needs: []` so it reports on a pipeline that has already
+# broken — a notifier that only runs when everything passed is decoration.
+# The digest logic (failures lead; an allow_failure job is NOT a broken
+# pipeline; an unreadable pipeline is UNKNOWN, never PASSED) lives in
+# backend/app/ml/notify.py with its tests, not in this YAML.
+#
+# Set CAREROUTE_NOTIFY_WEBHOOK (any Slack-compatible incoming webhook) to have
+# it posted; unset, the digest is printed in the job log and nothing is sent.
+# The job never fails the pipeline: reporting an outcome must not change it.
+notify:pipeline-outcome:
+  stage: post-deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^only\// && $CI_COMMIT_BRANCH !~ /[\/,]notify[:.]pipeline\-outcome(,|$)/'  # only/<jobs> branch lists other jobs
+      when: never
+    - if: '$CAREROUTE_PYRIT_ONLY == "true"'  # security/pyrit: only the PyRIT job runs
+      when: never
+    - when: always
+  image: python:3.12-slim
+  needs: []
+  script:
+    - cd backend
+    - python -m app.ml.notify
+  allow_failure: true

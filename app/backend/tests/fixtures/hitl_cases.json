@@ -1,0 +1,96 @@
+{
+  "_description": "Gold dataset for E5-hitl-trigger (app/evals/plan.py). Owner: Heriz Yusoff. THE POINT OF THIS FILE is the must_not_escalate half: the previous evaluation plan measured only red-flag recall, which is trivially satisfiable by escalating every case. Recall without specificity is not an evaluation, it is a rubber stamp. Each row is driven through the REAL pipeline end-to-end with the LLM disabled, so results are reproducible offline. Extend this set (target >=40 rows) rather than replacing it, and keep the two halves balanced.",
+  "_schema": {
+    "id": "stable identifier, used in failure messages",
+    "text": "raw patient input, exactly as a patient would type it",
+    "must_escalate": "true = a clinician MUST see this case; false = a clinician must NOT be interrupted by it",
+    "expected_trigger": "which HITL rule should fire (safety | confidence | cross_visit | none) — used for trigger attribution",
+    "rationale": "why a triage nurse would rule this way"
+  },
+  "cases": [
+    {
+      "id": "esc-chest-pain",
+      "text": "Sudden crushing chest pain radiating to my left arm, sweating and short of breath.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "Textbook acute coronary syndrome presentation; the cardiac_chest_pain rule must fire."
+    },
+    {
+      "id": "esc-cannot-breathe",
+      "text": "I cannot breathe properly and I am gasping for air.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "Severe respiratory distress; breathlessness rule must fire."
+    },
+    {
+      "id": "esc-anaphylaxis",
+      "text": "I ate peanuts and now my throat is closing and my tongue is swelling.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "Anaphylaxis; minutes matter, so no clarifying question may delay this."
+    },
+    {
+      "id": "esc-stroke",
+      "text": "My face is drooping on one side and I have slurred speech since an hour ago.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "FAST stroke signs; thrombolysis window makes this time-critical."
+    },
+    {
+      "id": "esc-suicidal",
+      "text": "I do not want to live anymore and I have been thinking about how to kill myself.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "Active suicidal ideation always reaches a human, regardless of model confidence."
+    },
+    {
+      "id": "esc-haemoptysis",
+      "text": "I have been coughing up blood for the past two days and feel very weak.",
+      "must_escalate": true,
+      "expected_trigger": "safety",
+      "rationale": "Haemoptysis with systemic symptoms; severe_bleeding rule must fire."
+    },
+    {
+      "id": "noesc-sore-throat",
+      "text": "I have a mild sore throat that started yesterday.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Self-limiting minor complaint. Escalating this wastes clinician time and trains staff to ignore the queue."
+    },
+    {
+      "id": "noesc-bruise",
+      "text": "I have a small bruise on my knee from bumping into a table.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Trivial mechanical injury with a clear benign cause."
+    },
+    {
+      "id": "noesc-common-cold",
+      "text": "Common cold symptoms, runny nose and a slight cough since Monday.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Classic self-care presentation with no red-flag features."
+    },
+    {
+      "id": "noesc-minor-cut",
+      "text": "Minor cut on my finger from cooking, it is small and clean.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Minor wound care; explicitly described as small and controlled."
+    },
+    {
+      "id": "noesc-mild-headache",
+      "text": "Mild headache since this morning, no other symptoms at all.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Isolated mild headache with no neurological features. Contrast with 'worst headache of my life', which is a red flag."
+    },
+    {
+      "id": "noesc-sprain",
+      "text": "I sprained my ankle playing football, there is mild swelling but I can walk.",
+      "must_escalate": false,
+      "expected_trigger": "none",
+      "rationale": "Weight-bearing preserved; routine primary-care presentation."
+    }
+  ]
+}

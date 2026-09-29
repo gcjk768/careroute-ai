@@ -1,0 +1,132 @@
+.shell {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+}
+
+.emergency {
+  background: #c0392b;
+  color: var(--paper);
+}
+.emergencyInner {
+  margin: 0 auto;
+  display: flex;
+  max-width: 64rem;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 24px;
+  text-align: center;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  letter-spacing: 0.025em;
+}
+.tel {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: inherit;
+}
+
+.header {
+  border-bottom: 1px solid var(--line);
+}
+.headerInner {
+  margin: 0 auto;
+  display: flex;
+  max-width: 64rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+.brandText {
+  line-height: 1;
+}
+.brandName {
+  font-family: var(--ff-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.brandTag {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--pine-soft);
+}
+.headerNote {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--moss);
+}
+
+.main {
+  flex: 1;
+  padding: 32px 24px;
+}
+
+.footer {
+  border-top: 1px solid var(--line);
+}
+.footerInner {
+  margin: 0 auto;
+  display: flex;
+  max-width: 64rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 20px 24px;
+}
+.disclaimer {
+  margin: 0;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--moss);
+}
+.staffLink {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+  text-decoration: none;
+  transition: background-color 0.2s ease;
+}
+.staffLink:hover {
+  background: var(--paper-2);
+}
+
+@media (min-width: 640px) {
+  .emergencyInner,
+  .headerInner,
+  .footerInner {
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+  .main {
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .main {
+    padding-top: 48px;
+    padding-bottom: 48px;
+  }
+}

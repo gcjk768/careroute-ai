@@ -1,0 +1,166 @@
+{
+  "description": "E10 retrieval gold set. Each query names the ONE corpus document (app/rag.py CORPUS title) a clinician would expect to be cited. 'lexical' queries share content words with the document; 'paraphrase' queries were written to share NO content word with the document's title, text or keywords, so they measure what term matching cannot do. Written before any retriever was measured on them.",
+  "queries": [
+    {
+      "kind": "lexical",
+      "query": "crushing chest pain spreading to my jaw",
+      "expected": "Chest Pain — Emergency Assessment"
+    },
+    {
+      "kind": "lexical",
+      "query": "heart pain with pressure in my chest",
+      "expected": "Chest Pain — Emergency Assessment"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "it feels like an elephant is sitting on my ribcage and I am sweating",
+      "expected": "Chest Pain — Emergency Assessment"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "squeezing sensation behind my breastbone radiating to my left shoulder",
+      "expected": "Chest Pain — Emergency Assessment"
+    },
+    {
+      "kind": "lexical",
+      "query": "I am gasping and breathless",
+      "expected": "Respiratory Distress — Airway Priority"
+    },
+    {
+      "kind": "lexical",
+      "query": "lips turning blue and struggling for breath",
+      "expected": "Respiratory Distress — Airway Priority"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "I can only manage two words before I have to stop to suck in air",
+      "expected": "Respiratory Distress — Airway Priority"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "wheezing so hard I feel like I am suffocating",
+      "expected": "Acute Asthma and Wheeze",
+      "note": "Re-pinned 2026-09-23: the corpus gained a dedicated wheeze/asthma guidance with the 22 -> 51 widening; for a wheezing patient it is the specific answer, the airway document the general one."
+    },
+    {
+      "kind": "lexical",
+      "query": "allergic reaction with throat swelling",
+      "expected": "Anaphylaxis Recognition and First Response"
+    },
+    {
+      "kind": "lexical",
+      "query": "should I use my epipen, my tongue is swelling",
+      "expected": "Anaphylaxis Recognition and First Response"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "ate peanuts by mistake and now my mouth feels tight with itchy hives everywhere",
+      "expected": "Anaphylaxis Recognition and First Response"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "stung by a bee and my eyelids and lips are puffing up fast",
+      "expected": "Anaphylaxis Recognition and First Response"
+    },
+    {
+      "kind": "lexical",
+      "query": "one side of my face is drooping and my speech is slurred",
+      "expected": "Stroke — FAST Recognition"
+    },
+    {
+      "kind": "lexical",
+      "query": "sudden weakness and a numb arm, worried about a stroke",
+      "expected": "Stroke — FAST Recognition"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "my dad suddenly cannot lift his left hand and his words come out jumbled",
+      "expected": "Stroke — FAST Recognition"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "half of my mother's smile has gone crooked since this morning",
+      "expected": "Stroke — FAST Recognition"
+    },
+    {
+      "kind": "lexical",
+      "query": "deep cut that keeps bleeding through the bandage",
+      "expected": "Bleeding Control — Severity Assessment"
+    },
+    {
+      "kind": "lexical",
+      "query": "lost a lot of blood from a wound",
+      "expected": "Bleeding Control — Severity Assessment"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "sliced my palm with a kitchen knife and the towel is soaked red",
+      "expected": "Bleeding Control — Severity Assessment"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "gash on my leg that will not stop oozing even when I press on it",
+      "expected": "Bleeding Control — Severity Assessment"
+    },
+    {
+      "kind": "lexical",
+      "query": "I feel hopeless and have suicidal thoughts",
+      "expected": "Mental Health Crisis — Risk Screening"
+    },
+    {
+      "kind": "lexical",
+      "query": "thinking about self-harm, I am in crisis",
+      "expected": "Mental Health Crisis — Risk Screening"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "I do not want to be alive anymore and keep thinking of ending it",
+      "expected": "Mental Health Crisis — Risk Screening"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "everyone would be better off without me around",
+      "expected": "Mental Health Crisis — Risk Screening"
+    },
+    {
+      "kind": "lexical",
+      "query": "high fever and chills for three days",
+      "expected": "Fever Management in Adults"
+    },
+    {
+      "kind": "lexical",
+      "query": "temperature of 39 that will not go down",
+      "expected": "Fever Management in Adults"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "burning up and shivering uncontrollably under the blanket since Monday",
+      "expected": "Fever Management in Adults"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "running hot for days and my whole body keeps shaking",
+      "expected": "Fever Management in Adults"
+    },
+    {
+      "kind": "lexical",
+      "query": "mild headache and a runny nose from a cold",
+      "expected": "Minor Ailments — Self-Care Guidance"
+    },
+    {
+      "kind": "lexical",
+      "query": "small rash and a sore throat",
+      "expected": "Minor Ailments — Self-Care Guidance"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "sniffles and a scratchy feeling when I swallow",
+      "expected": "Minor Ailments — Self-Care Guidance"
+    },
+    {
+      "kind": "paraphrase",
+      "query": "slight itchy spots on my wrist but I feel fine otherwise",
+      "expected": "Minor Ailments — Self-Care Guidance"
+    }
+  ]
+}

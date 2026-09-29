@@ -1,0 +1,24 @@
+flowchart LR
+    subgraph ML["One trained model"]
+        direction LR
+        A@{ icon: "mdi:brain", form: "square", label: "Severity-Classifier", pos: "b" }
+    end
+    subgraph LLMS["LLM reasoning, bounded"]
+        direction LR
+        B@{ icon: "mdi:text-search", form: "square", label: "Symptom-Intake", pos: "b" }
+        C@{ icon: "mdi:map-marker-radius", form: "square", label: "Care-Routing", pos: "b" }
+        D@{ icon: "mdi:comment-search", form: "square", label: "Safety-NLP", pos: "b" }
+        E@{ icon: "mdi:clipboard-pulse", form: "square", label: "Clinician-Handoff", pos: "b" }
+    end
+    subgraph DET["Deterministic by design"]
+        direction LR
+        F@{ icon: "mdi:alert-octagon", form: "square", label: "Red-flag rules", pos: "b" }
+        G@{ icon: "mdi:account-supervisor", form: "square", label: "Human-in-the-Loop", pos: "b" }
+        H@{ icon: "mdi:magnify-scan", form: "square", label: "Reflection critic", pos: "b" }
+        I@{ icon: "mdi:shield-check", form: "square", label: "Guardrails", pos: "b" }
+    end
+    ML --> OUT["One triage decision"]
+    LLMS --> OUT
+    DET --> OUT
+    style ML fill:#d5e8d4
+    style DET fill:#ffe6cc

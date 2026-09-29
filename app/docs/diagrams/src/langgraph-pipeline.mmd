@@ -1,0 +1,35 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	classifier(classifier)
+	safety(safety)
+	routing(routing)
+	hitl(hitl)
+	reflection(reflection)
+	handoff(handoff)
+	emergency_guidance(emergency_guidance)
+	plan(plan)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	classifier --> safety;
+	emergency_guidance -.-> hitl;
+	handoff -.-> __end__;
+	hitl -.-> __end__;
+	hitl -.-> reflection;
+	hitl -.-> routing;
+	intake --> classifier;
+	plan -.-> emergency_guidance;
+	plan -.-> hitl;
+	plan -.-> routing;
+	reflection -.-> handoff;
+	routing -.-> hitl;
+	routing -.-> reflection;
+	safety --> plan;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

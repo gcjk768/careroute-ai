@@ -1,0 +1,61 @@
+# [MLOps] Prometheus scrape + alerting config for CareRoute AI.
+# Scrapes the FastAPI backend's Prometheus exposition endpoint (backend:8000/metrics)
+# and evaluates the alert rules in alert.rules.yml. Course aspect: "Integrating &
+# Deploying — Logging and Monitoring" (inference latency / throughput / error).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+# Where FIRING alerts are sent. Without this block Prometheus still evaluates
+# alert.rules.yml, but the result only ever appears in its own /alerts page --
+# no notification is delivered to anyone. That was the gap here: five alert
+# rules, including BackendMetricsDown, that could never reach a human.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: careroute-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: careroute-backend
+
+  # [Microservices] One target per agent / shared-service container. The
+  # gateway job above already counts every call it makes to them
+  # (careroute_agent_calls_total); these are each container's own view.
+  - job_name: careroute-agents
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["classifier-agent:8101"]
+        labels: {service: careroute-classifier-agent}
+      - targets: ["safety-agent:8102"]
+        labels: {service: careroute-safety-agent}
+      - targets: ["routing-agent:8103"]
+        labels: {service: careroute-routing-agent}
+      - targets: ["reflection-agent:8104"]
+        labels: {service: careroute-reflection-agent}
+      - targets: ["hitl-agent:8105"]
+        labels: {service: careroute-hitl-agent}
+      - targets: ["handoff-agent:8106"]
+        labels: {service: careroute-handoff-agent}
+      - targets: ["llm-gateway:8107"]
+        labels: {service: careroute-llm-gateway}
+      - targets: ["rag-service:8108"]
+        labels: {service: careroute-rag-service}
+
+  # Alertmanager's own metrics (alerts held by state, notifications sent and
+  # failed per integration) for the dashboard's "Monitoring stack health" row.
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # Prometheus self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

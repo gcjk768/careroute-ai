@@ -1,0 +1,218 @@
+.shell {
+  margin: 0 auto;
+  display: flex;
+  min-height: 100vh;
+  max-width: 1500px;
+}
+
+/* Left rail — hidden below lg, shown as a sticky column at ≥1024px. */
+.rail {
+  display: none;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: 248px;
+  flex-shrink: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--line);
+  padding: 32px 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brandText {
+  line-height: 1;
+}
+.brandName {
+  font-family: var(--ff-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.brandTag {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--pine-soft);
+}
+
+.nav {
+  margin-top: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.navItem {
+  position: relative;
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-decoration: none;
+  transition: background-color 0.2s ease;
+}
+.navPill {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: var(--pine);
+}
+.navLabel {
+  position: relative;
+  z-index: 10;
+  display: block;
+  font-weight: 500;
+  color: var(--ink);
+}
+.navLabelActive {
+  color: var(--paper);
+}
+.navHint {
+  position: relative;
+  z-index: 10;
+  display: block;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+.navHintActive {
+  color: rgba(246, 241, 231, 0.7);
+}
+
+.railFoot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.signedIn {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fbf8f1;
+  padding: 10px 12px;
+}
+.signedInLabel {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--pine-soft);
+}
+.signedInName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.signedInRole {
+  font-size: 11px;
+  color: rgba(20, 35, 28, 0.6);
+}
+.logoutRail {
+  margin-top: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--coral);
+}
+.logoutRail:hover {
+  text-decoration: underline;
+}
+.patientLink {
+  display: block;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--moss);
+  text-decoration: none;
+}
+.patientLink:hover {
+  color: var(--ink);
+}
+
+.column {
+  flex: 1;
+}
+
+/* Mobile bar + nav — shown below lg, hidden at ≥1024px. */
+.mobileBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+}
+.mobileBrand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mobileTitle {
+  font-family: var(--ff-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+.logoutMobile {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--coral);
+}
+.mobileNav {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 16px;
+}
+.mobileNavItem {
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+}
+.mobileNavItemActive {
+  background: var(--pine);
+  color: var(--paper);
+}
+
+.main {
+  padding: 32px 24px;
+}
+
+@media (min-width: 640px) {
+  .main {
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .rail {
+    display: flex;
+  }
+  .mobileBar,
+  .mobileNav {
+    display: none;
+  }
+  .main {
+    padding: 48px 56px;
+  }
+}

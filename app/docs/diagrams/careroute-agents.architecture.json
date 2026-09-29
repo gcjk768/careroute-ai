@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CareRoute AI — one agent, one container, one compute",
+    "output": "docs/diagrams/careroute-agents.html",
+    "quality_profile": "showcase",
+    "viewBox": [1360, 560],
+    "views": [
+      {
+        "id": "triage-path",
+        "label": "A triage request",
+        "focus": ["patient", "gateway", "classifier", "safety", "routing"],
+        "note": "The gateway keeps the fixed, safety-gated step order and calls each worker over HTTP."
+      },
+      {
+        "id": "secrets-and-state",
+        "label": "Secrets and durable state",
+        "focus": ["gateway", "llm", "rag", "redis"],
+        "note": "One container holds the provider key; Redis makes a restart lossless."
+      },
+      {
+        "id": "escalation",
+        "label": "Escalation to a clinician",
+        "focus": ["gateway", "hitl", "reflection", "handoff", "redis"],
+        "note": "An unavailable agent escalates the case; it never lowers the care tier."
+      }
+    ]
+  },
+  "components": [
+    { "id": "patient", "type": "external", "label": "Patient / Staff UI", "sublabel": "Next.js :8080", "pos": [30, 292], "size": [152, 58] },
+    { "id": "gateway", "type": "backend", "label": "intake-gateway", "sublabel": "public API + SSE :8000", "tag": "orchestrator", "pos": [212, 288], "size": [180, 64] },
+    { "id": "redis", "type": "database", "label": "redis", "sublabel": ":6379 · queue + audit", "pos": [212, 440], "size": [180, 58] },
+
+    { "id": "safety", "type": "security", "label": "safety-agent", "sublabel": ":8102 · red-flag rules", "pos": [468, 36], "size": [186, 58] },
+    { "id": "routing", "type": "backend", "label": "routing-agent", "sublabel": ":8103 · clinics + hours", "pos": [684, 36], "size": [186, 58] },
+    { "id": "classifier", "type": "backend", "label": "classifier-agent", "sublabel": ":8101 · trained model", "pos": [900, 36], "size": [186, 58] },
+
+    { "id": "hitl", "type": "backend", "label": "hitl-agent", "sublabel": ":8105 · review decision", "pos": [468, 168], "size": [186, 58] },
+    { "id": "reflection", "type": "backend", "label": "reflection-agent", "sublabel": ":8104 · critic pass", "pos": [684, 168], "size": [186, 58] },
+    { "id": "handoff", "type": "backend", "label": "handoff-agent", "sublabel": ":8106 · clinician packet", "pos": [900, 168], "size": [186, 58] },
+
+    { "id": "rag", "type": "database", "label": "rag-service", "sublabel": ":8108 · corpus + embedder", "pos": [1136, 36], "size": [190, 58] },
+    { "id": "llm", "type": "cloud", "label": "llm-gateway", "sublabel": ":8107", "tag": "only provider key", "pos": [1136, 168], "size": [190, 58] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "one ECS task — ten containers on one compute", "wraps": ["gateway", "redis", "safety", "routing", "classifier", "hitl", "reflection", "handoff", "rag", "llm"], "pad": 20 },
+    { "kind": "security-group", "label": "AGENT_TRANSPORT=http — reachable only inside the task", "wraps": ["safety", "routing", "classifier", "hitl", "reflection", "handoff", "rag", "llm"], "pad": 13 }
+  ],
+  "connections": [
+    { "from": "patient", "to": "gateway", "label": "HTTPS + SSE", "variant": "emphasis", "labelDy": -32 },
+
+    { "from": "gateway", "to": "safety", "label": "POST /v1/invoke", "variant": "security", "labelDy": -26 },
+    { "from": "gateway", "to": "routing", "variant": "emphasis" },
+    { "from": "gateway", "to": "classifier", "variant": "emphasis" },
+    { "from": "gateway", "to": "hitl", "variant": "emphasis" },
+    { "from": "gateway", "to": "reflection", "variant": "emphasis" },
+    { "from": "gateway", "to": "handoff", "variant": "emphasis" },
+
+    { "from": "classifier", "to": "rag", "variant": "dashed" },
+    { "from": "handoff", "to": "llm", "variant": "dashed" },
+    { "from": "gateway", "to": "redis", "label": "write-through", "variant": "security", "labelDy": 46 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Transport is a switch, not a fork",
+      "items": [
+        "Unset: every worker in one process — the monolith image, and what the test suite runs",
+        "All 20 gold vignettes reach the identical decision either way (test_ms_transport_parity.py)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Degradation never gets less cautious",
+      "items": [
+        "A missing classifier, safety, routing or HITL answer escalates; the care tier is never lowered",
+        "AgentDown alerts on call outcomes, because a degraded case still completes and looks healthy"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "What is deployed today",
+      "items": [
+        "The monolith image on one compute — a cost decision, not a limit of the split",
+        "Redis makes a restart lossless, not a second task correct: memory reloads only at start-up"
+      ]
+    }
+  ]
+}
