@@ -14,6 +14,8 @@ tier and a real nearby clinic, and a cited explanation. Anything urgent or uncer
 > **Academic prototype.** This was built for the NUS-ISS MTech *Architecting AI Systems* practice module (Team 3). It is
 > **not** a certified medical device. Do not use it for real clinical decisions.
 
+> **MLOps deep dive.** The severity model's pipeline (release gates shared by training and CI, MLflow registry, DVC lineage, fairness and drift monitoring, canary promotion and drift-triggered retraining) is written up separately in [**careroute-mlops**](https://github.com/gcjk768/careroute-mlops), with its own architecture diagram and tests.
+
 ![Architecture](docs/architecture.drawio.svg)
 
 <sub>Editable source: [`docs/architecture.drawio`](docs/architecture.drawio). PNG fallback: [`docs/architecture.png`](docs/architecture.png).</sub>
